@@ -15,7 +15,6 @@ from .models import SmokingIncident
 
 def stream_video(request):
     engine = DetectionEngine()
-    engine.seed_initial_incidents_if_empty()
     requested_source = request.GET.get("source")
     response = StreamingHttpResponse(
         engine.generate_mjpeg(requested_source=requested_source),
@@ -27,7 +26,6 @@ def stream_video(request):
 
 def get_status(request):
     engine = DetectionEngine()
-    engine.seed_initial_incidents_if_empty()
     data = engine.get_status_dict()
     total_incidents = SmokingIncident.objects.count()
     data["total_incidents"] = total_incidents
@@ -55,6 +53,8 @@ def update_config(request):
         engine.show_person_box = bool(body["show_person_box"])
     if "conf_threshold" in body:
         engine.conf_threshold = max(0.15, min(0.90, float(body["conf_threshold"])))
+    if "min_consecutive_frames" in body:
+        engine.min_consecutive_frames = max(3, min(40, int(body["min_consecutive_frames"])))
     if "source_mode" in body and body["source_mode"] in ["cctv_demo", "webcam", "custom_video"]:
         engine.set_source_mode(body["source_mode"])
     if "paused" in body:
@@ -65,10 +65,16 @@ def update_config(request):
 
 @csrf_exempt
 def incidents_view(request):
-    engine = DetectionEngine()
-    engine.seed_initial_incidents_if_empty()
-
     if request.method == "DELETE":
+        for inc in SmokingIncident.objects.all():
+            if inc.snapshot_url:
+                fname = Path(inc.snapshot_url).name
+                fpath = Path(settings.MEDIA_ROOT) / "snapshots" / fname
+                if fpath.exists():
+                    try:
+                        fpath.unlink()
+                    except Exception:
+                        pass
         SmokingIncident.objects.all().delete()
         return JsonResponse({"ok": True, "incidents": []})
 

@@ -184,6 +184,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('monitor') // 'monitor' | 'incidents' | 'metrics'
   const [sourceMode, setSourceMode] = useState('cctv_demo') // 'cctv_demo' | 'custom_video' | 'webcam'
   const [confThreshold, setConfThreshold] = useState(0.45)
+  const [minConsecutiveFrames, setMinConsecutiveFrames] = useState(12)
   const [twoStage, setTwoStage] = useState(true)
   const [showPersonBox, setShowPersonBox] = useState(true)
   const [paused, setPaused] = useState(false)
@@ -194,9 +195,10 @@ export default function App() {
     current_frame: 0,
     total_frames: 240,
     person_count: 5,
-    smoker_count: 1,
-    cigarette_count: 1,
-    max_confidence: 0.85,
+    smoker_count: 0,
+    cigarette_count: 0,
+    consecutive_hits: 0,
+    max_confidence: 0.0,
     fps: 28.5,
     inference_ms: 34.2,
     status: 'AMAN',
@@ -223,6 +225,7 @@ export default function App() {
           person_count: data.person_count,
           smoker_count: data.smoker_count,
           cigarette_count: data.cigarette_count,
+          consecutive_hits: data.consecutive_hits ?? 0,
           max_confidence: data.max_confidence,
           fps: data.fps,
           inference_ms: data.inference_ms,
@@ -260,7 +263,6 @@ export default function App() {
     }
   }
 
-  // On mount, ensure backend starts in 'cctv_demo' mode (never webcam unless user switches to webcam tab)
   useEffect(() => {
     fetch(`${API_BASE}/api/config/`, {
       method: 'POST',
@@ -268,6 +270,7 @@ export default function App() {
       body: JSON.stringify({
         source_mode: 'cctv_demo',
         conf_threshold: 0.45,
+        min_consecutive_frames: 12,
         two_stage: true,
         show_person_box: true,
         paused: false,
@@ -278,15 +281,14 @@ export default function App() {
     fetchIncidents()
     fetchMetrics()
 
-    const statusTimer = setInterval(fetchStatus, 800)
-    const incidentTimer = setInterval(fetchIncidents, 2500)
+    const statusTimer = setInterval(fetchStatus, 750)
+    const incidentTimer = setInterval(fetchIncidents, 2200)
     return () => {
       clearInterval(statusTimer)
       clearInterval(incidentTimer)
     }
   }, [])
 
-  // Stop stream & release camera whenever user leaves the 'monitor' tab
   const handleSwitchMainTab = async (tabName) => {
     setActiveTab(tabName)
     if (tabName !== 'monitor') {
@@ -304,7 +306,6 @@ export default function App() {
     }
   }
 
-  // Switch between CCTV Demo, Custom Video, and Live Webcam
   const handleSelectSource = async (newSource) => {
     setSourceMode(newSource)
     setPaused(false)
@@ -328,6 +329,20 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conf_threshold: val }),
+      })
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleConsecutiveFramesChange = async (newVal) => {
+    const val = parseInt(newVal, 10)
+    setMinConsecutiveFrames(val)
+    try {
+      await fetch(`${API_BASE}/api/config/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ min_consecutive_frames: val }),
       })
     } catch (err) {
       console.error(err)
@@ -419,7 +434,9 @@ export default function App() {
     }
   }
 
-  const isAlert = status.status === 'PELANGGARAN MEROKOK' || status.cigarette_count > 0
+  const isAlert = status.status === 'PELANGGARAN MEROKOK'
+  const isVerifying = status.status === 'VERIFIKASI'
+  const verifyPct = Math.min(100, Math.round((status.consecutive_hits / Math.max(1, minConsecutiveFrames)) * 100))
 
   return (
     <div className="app-layout">
@@ -470,7 +487,7 @@ export default function App() {
           </div>
           <div className="sidebar-footer-sub">
             Backend: Django 5.2 REST Stream<br />
-            Mode: {twoStage ? 'Two-Stage (Person ROI + Rokok)' : 'Single-Stage YOLOv8n'}
+            Filter Snapshot: Min {minConsecutiveFrames} Frame Konsisten
           </div>
         </div>
       </aside>
@@ -491,7 +508,9 @@ export default function App() {
             <div className={`status-pill ${isAlert ? 'danger' : ''}`}>
               <span className={`pulse-dot ${isAlert ? 'danger' : ''}`} />
               {isAlert
-                ? `TERDETEKSI MEROKOK (${status.cigarette_count} Titik Rokok)`
+                ? `TERKONFIRMASI MEROKOK (${status.cigarette_count} Titik Rokok)`
+                : isVerifying
+                ? `VERIFIKASI DETEKSI (${status.consecutive_hits}/${minConsecutiveFrames} Frame)`
                 : 'ZONA AMAN • BEBAS ASAP ROKOK'}
             </div>
           </div>
@@ -503,8 +522,12 @@ export default function App() {
             <div className={`kpi-card ${isAlert ? 'alert-card' : ''}`}>
               <div>
                 <div className="kpi-label">Status Kawasan</div>
-                <div className={`kpi-value ${isAlert ? 'danger' : 'emerald'}`} style={{ fontSize: '1.3rem' }}>
-                  {isAlert ? 'MEROKOK TERDETEKSI' : 'KAWASAN AMAN'}
+                <div className={`kpi-value ${isAlert ? 'danger' : 'emerald'}`} style={{ fontSize: '1.25rem' }}>
+                  {isAlert
+                    ? 'MEROKOK TERDETEKSI'
+                    : isVerifying
+                    ? `VERIFIKASI (${status.consecutive_hits}/${minConsecutiveFrames})`
+                    : 'KAWASAN AMAN'}
                 </div>
                 <div className="kpi-sub">
                   Confidence Maks: {(status.max_confidence * 100).toFixed(1)}%
@@ -524,7 +547,7 @@ export default function App() {
                 <div className="kpi-label">Jumlah Orang di Kamera</div>
                 <div className="kpi-value">{status.person_count} Orang</div>
                 <div className="kpi-sub">
-                  Terindikasi Merokok: <strong>{status.smoker_count} Orang</strong>
+                  Terkonfirmasi Merokok: <strong>{status.smoker_count} Orang</strong>
                 </div>
               </div>
               <div className="kpi-icon-box">
@@ -539,7 +562,7 @@ export default function App() {
 
             <div className="kpi-card">
               <div>
-                <div className="kpi-label">Titik Rokok Aktif</div>
+                <div className="kpi-label">Titik Rokok Terkonfirmasi</div>
                 <div className={`kpi-value ${status.cigarette_count > 0 ? 'danger' : 'emerald'}`}>
                   {status.cigarette_count} Batang
                 </div>
@@ -598,7 +621,7 @@ export default function App() {
                     </button>
                     <button className="btn btn-primary" onClick={handleManualCapture}>
                       <IconCamera size={15} />
-                      <span>Ambil Snapshot Bukti</span>
+                      <span>Ambil Snapshot Manual</span>
                     </button>
                   </div>
                 </div>
@@ -624,7 +647,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Source Mode Sub-Tabs (Camera only activates when Webcam tab is chosen) */}
+                {/* Source Mode Sub-Tabs */}
                 <div className="video-toolbar">
                   <div className="toolbar-group">
                     <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#476658' }}>
@@ -695,7 +718,7 @@ export default function App() {
                     <div className="control-row">
                       <div className="control-row-info">
                         <h4>Tampilkan Kotak Orang</h4>
-                        <p>Kotak Hijau (AMAN) & Merah (MEROKOK) pada setiap orang</p>
+                        <p>Kotak Hijau (AMAN), Kuning (VERIFIKASI), & Merah (MEROKOK)</p>
                       </div>
                       <label className="switch">
                         <input
@@ -707,6 +730,7 @@ export default function App() {
                       </label>
                     </div>
 
+                    {/* Confidence Threshold Slider */}
                     <div className="range-box">
                       <div className="range-header">
                         <span>Confidence Threshold Rokok</span>
@@ -751,6 +775,39 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Anti-False Positive Consecutive Frames Filter */}
+                    <div className="range-box">
+                      <div className="range-header">
+                        <span>Filter Snapshot (Min Frame Berturut)</span>
+                        <span style={{ color: '#059669', fontSize: '0.88rem' }}>
+                          {minConsecutiveFrames} Frame
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="5"
+                        max="25"
+                        step="1"
+                        value={minConsecutiveFrames}
+                        onChange={(e) => handleConsecutiveFramesChange(e.target.value)}
+                        className="range-input"
+                      />
+                      <div style={{ fontSize: '0.72rem', color: '#476658', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Status Verifikasi Saat Ini:</span>
+                        <strong>{status.consecutive_hits} / {minConsecutiveFrames} Frame ({verifyPct}%)</strong>
+                      </div>
+                      <div style={{ width: '100%', height: '6px', background: '#e2eee8', borderRadius: '99px', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            width: `${verifyPct}%`,
+                            height: '100%',
+                            background: verifyPct >= 100 ? '#ef4444' : '#10b981',
+                            transition: 'width 0.2s ease',
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -758,8 +815,8 @@ export default function App() {
                 <div className="card">
                   <div className="card-header">
                     <div>
-                      <div className="card-title">Snapshot Pelanggaran Terbaru</div>
-                      <div className="card-subtitle">Tangkapan layar otomatis saat rokok terdeteksi</div>
+                      <div className="card-title">Snapshot Pelanggaran Terkonfirmasi</div>
+                      <div className="card-subtitle">Hanya disimpan jika rokok konsisten &ge; {minConsecutiveFrames} frame</div>
                     </div>
                     <button
                       className="btn"
@@ -773,7 +830,7 @@ export default function App() {
                   <div className="incident-mini-list">
                     {incidents.length === 0 ? (
                       <div style={{ textAlign: 'center', padding: '24px 12px', color: '#759485', fontSize: '0.84rem' }}>
-                        Belum ada snapshot pelanggaran tercatat.
+                        Belum ada snapshot pelanggaran terkonfirmasi.
                       </div>
                     ) : (
                       incidents.slice(0, 6).map((item) => (
@@ -788,7 +845,7 @@ export default function App() {
                             className="incident-thumb"
                           />
                           <div className="incident-meta">
-                            <h5>{item.cigarette_count} Rokok Terdeteksi</h5>
+                            <h5>{item.cigarette_count} Rokok Terkonfirmasi</h5>
                             <p>{item.timestamp} • Frame #{item.frame_number}</p>
                           </div>
                           <span className="conf-tag">
@@ -810,7 +867,7 @@ export default function App() {
                 <div>
                   <div className="card-title">Galeri Bukti Pelanggaran Kawasan Tanpa Rokok</div>
                   <div className="card-subtitle">
-                    Klik pada foto untuk memperbesar bukti tangkapan kamera CCTV
+                    Hanya menangkap snapshot setelah terdeteksi konsisten minimal {minConsecutiveFrames} frame berturut-turut (bebas false positive 1-frame)
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
@@ -823,7 +880,7 @@ export default function App() {
 
               {incidents.length === 0 ? (
                 <div style={{ padding: '48px', textAlign: 'center', color: '#759485' }}>
-                  Belum ada data pelanggaran. Buka tab Live Monitoring untuk menangkap bukti secara otomatis.
+                  Belum ada data pelanggaran terkonfirmasi. Buka tab Live Monitoring untuk memantau secara otomatis.
                 </div>
               ) : (
                 <div className="gallery-grid">
@@ -940,9 +997,9 @@ export default function App() {
               <div className="card">
                 <div className="card-header">
                   <div>
-                    <div className="card-title">Arsitektur Two-Stage Detection untuk Kamera CCTV</div>
+                    <div className="card-title">Arsitektur Two-Stage Detection + Temporal Filter untuk Kamera CCTV</div>
                     <div className="card-subtitle">
-                      Solusi mengatasi perbedaan jarak kamera (Domain Shift) & False Positive pada tiang ruangan
+                      Solusi mengatasi perbedaan jarak kamera (Domain Shift) & False Positive 1-Frame
                     </div>
                   </div>
                 </div>
@@ -962,10 +1019,10 @@ export default function App() {
                     </p>
                   </div>
                   <div className="pipeline-step">
-                    <span className="step-num">TAHAP 3 • FILTER & NMS</span>
-                    <h4>Deteksi Rokok + Global NMS</h4>
+                    <span className="step-num">TAHAP 3 • TEMPORAL FILTER</span>
+                    <h4>Verifikasi Frame Berturut-turut</h4>
                     <p>
-                      Model hasil training (best.pt, mAP 94.7%) mendeteksi batang rokok pada crop, menyaring ukuran kotak abnormal, dan menggabungkan koordinat ke frame CCTV utama.
+                      Deteksi sesaat (1–3 frame karena gangguan visual) hanya berstatus Verifikasi dan tidak masuk ke Snapshot. Snapshot hanya diambil jika rokok konsisten &ge; {minConsecutiveFrames} frame.
                     </p>
                   </div>
                 </div>

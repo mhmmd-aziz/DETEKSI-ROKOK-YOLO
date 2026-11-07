@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['smoking detection - v1 2023-03-28 12-26am']
+
+roboflow:
+  workspace: mhmmdazizs-workspace
+  project: cigarette-detection-y1xgi-ie1nc-gy7bv
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/mhmmdazizs-workspace/cigarette-detection-y1xgi-ie1nc-gy7bv/dataset/1

@@ -15,6 +15,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 const String kDefaultLanServerUrl = 'http://192.168.1.138:8000';
 const MethodChannel _bgServiceChannel = MethodChannel('id.smokeguard/bg_service');
 
+/// Permintaan pindah tab dari luar widget (mis. notifikasi diketuk). 1 = Bukti Insiden.
+final ValueNotifier<int?> kTabRequest = ValueNotifier<int?>(null);
+
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
@@ -54,7 +57,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 Future<void> _initLocalNotifications() async {
   const androidSettings = AndroidInitializationSettings('ic_stat_smokeguard');
   const initSettings = InitializationSettings(android: androidSettings);
-  await flutterLocalNotificationsPlugin.initialize(initSettings);
+  await flutterLocalNotificationsPlugin.initialize(
+    initSettings,
+    onDidReceiveNotificationResponse: (_) => kTabRequest.value = 1,
+  );
 
   final androidPlugin =
       flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
@@ -410,7 +416,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   int _selectedIndex = 0;
   String _baseUrl = 'http://127.0.0.1:8000';
   bool _connected = false;
@@ -447,8 +454,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int? _lastNotifiedIncidentId;
   int? _lastTestAlertSeq;
   bool _hasSyncedInitialConfig = false;
-  Map<String, dynamic>? _inAppBannerAlert;
-  Timer? _bannerDismissTimer;
 
   Timer? _statusTimer;
   Timer? _frameTimer;
@@ -458,6 +463,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    kTabRequest.addListener(_onTabRequested);
+    _clearSystemAlerts();
+    _consumeLaunchTarget();
     _initConnectionAndFcm();
   }
 
@@ -651,10 +660,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    kTabRequest.removeListener(_onTabRequested);
     _statusTimer?.cancel();
     _frameTimer?.cancel();
     _incidentsTimer?.cancel();
-    _bannerDismissTimer?.cancel();
     super.dispose();
   }
 
@@ -672,38 +682,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (_) {}
   }
 
+  /// Saat aplikasi sedang dibuka, tidak ada notifikasi melayang. Insiden baru
+  /// cukup masuk ke daftar Bukti Insiden (badge angka bertambah) dan perangkat
+  /// bergetar singkat. Notifikasi melayang hanya muncul ketika aplikasi ditutup.
   Future<void> _triggerAlertBothHeadsUpAndSystem({
     required int id,
     required String title,
     required String body,
     String? snapshotUrl,
   }) async {
-    HapticFeedback.heavyImpact();
-    if (mounted) {
-      setState(() {
-        _inAppBannerAlert = {
-          'title': title,
-          'body': body,
-          'snapshot_url': snapshotUrl,
-        };
-      });
-      _bannerDismissTimer?.cancel();
-      _bannerDismissTimer = Timer(const Duration(seconds: 7), () {
-        if (mounted) {
-          setState(() {
-            _inAppBannerAlert = null;
-          });
-        }
-      });
-    }
+    HapticFeedback.mediumImpact();
+    _fetchIncidents();
+    _clearSystemAlerts();
+  }
 
-    await showHeadsUpNotification(
-      id: id,
-      title: title,
-      body: body,
-      snapshotUrl: snapshotUrl,
-      baseUrl: _baseUrl,
-    );
+  Future<void> _clearSystemAlerts() async {
+    try {
+      await _bgServiceChannel.invokeMethod('clearAlerts');
+    } catch (_) {}
+  }
+
+  Future<void> _consumeLaunchTarget() async {
+    try {
+      final tab = await _bgServiceChannel.invokeMethod<String>('consumeLaunchTab');
+      if (tab == 'incidents') {
+        kTabRequest.value = 1;
+      }
+    } catch (_) {}
+  }
+
+  void _selectTab(int idx) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _selectedIndex = idx;
+    });
+    if (idx == 0 && _sourceMode == 'webcam') {
+      _updateConfig({'source_mode': 'webcam'});
+    } else if (idx != 0 && _sourceMode == 'webcam') {
+      _updateConfig({'stop_stream': true});
+    }
+    if (idx == 1) _fetchIncidents();
+    if (idx == 2) _fetchMetrics();
+  }
+
+  void _onTabRequested() {
+    final req = kTabRequest.value;
+    if (req != null) {
+      kTabRequest.value = null;
+      if (mounted && req != _selectedIndex) _selectTab(req);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _clearSystemAlerts();
+      _consumeLaunchTarget();
+      _syncNativeBgService();
+      _fetchIncidents();
+    }
   }
 
   Future<void> _fetchLatestFrame() async {
@@ -883,18 +920,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _handleTestNotification() async {
+    HapticFeedback.mediumImpact();
     try {
       await http.post(Uri.parse('$_baseUrl/api/notifications/test/'));
     } catch (_) {}
-    final latestSnap = _incidents.isNotEmpty
-        ? (_incidents.first['snapshot_url'] as String?)
-        : null;
-    await _triggerAlertBothHeadsUpAndSystem(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title: 'PERINGATAN KTR • $_cameraName',
-      body:
-          'Uji Notifikasi Atas Layar: Terdeteksi aktivitas merokok di $_location.',
-      snapshotUrl: latestSnap,
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Sinyal uji terkirim. Notifikasi melayang hanya tampil saat aplikasi ditutup.',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: SgColors.inkPrimary,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 3),
+      ),
     );
   }
 
@@ -1170,36 +1211,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Row(
                           children: [
-                            const Text(
-                              'SmokeGuard AI',
-                              style: TextStyle(
-                                fontSize: 16.5,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.3,
-                                color: SgColors.inkPrimary,
-                              ),
-                            ),
-                            const SizedBox(width: 7),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: SgColors.emeraldTint,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: SgColors.emeraldPrimary
-                                      .withValues(alpha: 0.25),
-                                ),
-                              ),
-                              child: const Text(
-                                'YOLOv8 2-STAGE',
+                            const Flexible(
+                              child: Text(
+                                'SmokeGuard AI',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 9.5,
+                                  fontSize: 16.5,
                                   fontWeight: FontWeight.w800,
-                                  color: SgColors.emeraldDeep,
-                                  letterSpacing: 0.3,
+                                  letterSpacing: -0.3,
+                                  color: SgColors.inkPrimary,
                                 ),
                               ),
                             ),
@@ -1288,125 +1309,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       : _buildMetricsTab(),
             ),
           ),
-
-          // Spring Animated Top Heads-Up Notification Banner
-          AnimatedSlide(
-            duration: const Duration(milliseconds: 340),
-            curve: Curves.easeOutBack,
-            offset: _inAppBannerAlert != null
-                ? Offset.zero
-                : const Offset(0, -1.3),
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 220),
-              opacity: _inAppBannerAlert != null ? 1.0 : 0.0,
-              child: _inAppBannerAlert == null
-                  ? const SizedBox.shrink()
-                  : Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-                      child: Material(
-                        elevation: 16,
-                        shadowColor: Colors.black.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(18),
-                        color: SgColors.inkPrimary,
-                        child: Container(
-                          padding: const EdgeInsets.all(13),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: SgColors.crimsonAlert,
-                              width: 1.5,
-                            ),
-                          ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    width: 38,
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      color: SgColors.crimsonAlert,
-                                      borderRadius: BorderRadius.circular(11),
-                                    ),
-                                    child: const Icon(
-                                      Icons.gpp_maybe_rounded,
-                                      color: Colors.white,
-                                      size: 21,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 11),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _inAppBannerAlert!['title'] ?? '',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 13.5,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 3),
-                                        Text(
-                                          _inAppBannerAlert!['body'] ?? '',
-                                          style: const TextStyle(
-                                            color: Color(0xFFD1FAE5),
-                                            fontSize: 12,
-                                            height: 1.3,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    onPressed: () {
-                                      setState(() {
-                                        _inAppBannerAlert = null;
-                                      });
-                                    },
-                                    icon: const Icon(
-                                      Icons.close_rounded,
-                                      color: Colors.white70,
-                                      size: 18,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (_inAppBannerAlert!['snapshot_url'] != null &&
-                                  (_inAppBannerAlert!['snapshot_url'] as String)
-                                      .isNotEmpty) ...[
-                                const SizedBox(height: 9),
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: SizedBox(
-                                    height: 105,
-                                    width: double.infinity,
-                                    child: Image.network(
-                                      (_inAppBannerAlert!['snapshot_url']
-                                                  as String)
-                                              .startsWith('http')
-                                          ? (_inAppBannerAlert!['snapshot_url']
-                                              as String)
-                                          : '$_baseUrl${_inAppBannerAlert!['snapshot_url']}',
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, _, _) =>
-                                          const SizedBox.shrink(),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-            ),
-          ),
         ],
       ),
       bottomNavigationBar: Container(
@@ -1422,19 +1324,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           surfaceTintColor: Colors.transparent,
           indicatorColor: SgColors.emeraldTint,
           selectedIndex: _selectedIndex,
-          onDestinationSelected: (idx) {
-            HapticFeedback.selectionClick();
-            setState(() {
-              _selectedIndex = idx;
-            });
-            if (idx == 0 && _sourceMode == 'webcam') {
-              _updateConfig({'source_mode': 'webcam'});
-            } else if (idx != 0 && _sourceMode == 'webcam') {
-              _updateConfig({'stop_stream': true});
-            }
-            if (idx == 1) _fetchIncidents();
-            if (idx == 2) _fetchMetrics();
-          },
+          onDestinationSelected: _selectTab,
           destinations: [
             const NavigationDestination(
               icon: Icon(Icons.videocam_outlined, color: SgColors.inkSecondary),
@@ -1654,7 +1544,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             const SizedBox(width: 5),
                             Text(
                               isAlert
-                                  ? 'PELANGGARAN MEROKOK'
+                                  ? 'PELANGGARAN'
                                   : isVerifying
                                       ? 'VERIFIKASI ($_consecutiveHits/$_minConsecutiveFrames)'
                                       : 'AREA AMAN KTR',
@@ -1711,17 +1601,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Filter Temporal Anti-False-Positive ($_consecutiveHits/$_minConsecutiveFrames Frame)',
-                          style: const TextStyle(
-                            color: Color(0xFFB7D3C6),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: [FontFeature.tabularFigures()],
+                        Expanded(
+                          child: Text(
+                            'Verifikasi $_consecutiveHits/$_minConsecutiveFrames Frame',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFB7D3C6),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Text(
-                          'Conf Threshold ${(_confThreshold * 100).round()}%',
+                          'Conf ${(_confThreshold * 100).round()}%',
                           style: const TextStyle(
                             color: SgColors.emeraldLight,
                             fontSize: 11,
@@ -1818,7 +1713,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 9,
           crossAxisSpacing: 9,
-          childAspectRatio: 1.88,
+          childAspectRatio: 1.55,
           children: [
             _buildTelemetryTile(
               label: 'ORANG TERDETEKSI',
@@ -2045,14 +1940,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Filter Temporal (Anti-Gangguan 1 Frame)',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: SgColors.inkSecondary,
+                  const Expanded(
+                    child: Text(
+                      'Filter Temporal (Anti-Gangguan 1 Frame)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: SgColors.inkSecondary,
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
@@ -2203,26 +2103,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.4,
-                  color: isAlert ? SgColors.crimsonAlert : SgColors.inkMuted,
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.4,
+                    color: isAlert ? SgColors.crimsonAlert : SgColors.inkMuted,
+                  ),
                 ),
               ),
+              const SizedBox(width: 6),
               Icon(icon, size: 16, color: accent),
             ],
           ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-              color: isAlert ? SgColors.crimsonAlert : SgColors.inkPrimary,
-              fontFeatures: const [FontFeature.tabularFigures()],
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
+                color: isAlert ? SgColors.crimsonAlert : SgColors.inkPrimary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ),
           Text(
@@ -2555,7 +2465,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 9,
           crossAxisSpacing: 9,
-          childAspectRatio: 1.82,
+          childAspectRatio: 1.55,
           children: [
             _buildTelemetryTile(
               label: 'mAP@50 (VALIDASI)',

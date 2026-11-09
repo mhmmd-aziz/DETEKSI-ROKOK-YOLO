@@ -34,8 +34,26 @@ class MainActivity : FlutterActivity() {
     companion object {
         @Volatile
         var isActivityVisible: Boolean = false
+        @Volatile
+        var pendingTab: String? = null
         const val CHANNEL_NAME = "id.smokeguard/bg_service"
         const val PREFS_NAME = "smokeguard_native_prefs"
+        const val EXTRA_OPEN_TAB = "open_tab"
+    }
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        captureTarget(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureTarget(intent)
+    }
+
+    private fun captureTarget(intent: Intent?) {
+        intent?.getStringExtra(EXTRA_OPEN_TAB)?.let { pendingTab = it }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -44,6 +62,22 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 when (call.method) {
+                    "consumeLaunchTab" -> {
+                        val tab = pendingTab
+                        pendingTab = null
+                        result.success(tab)
+                    }
+                    "clearAlerts" -> {
+                        try {
+                            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                nm.activeNotifications
+                                    .filter { it.id != SmokeGuardBgService.FOREGROUND_ID }
+                                    .forEach { nm.cancel(it.id) }
+                            }
+                        } catch (_: Exception) {}
+                        result.success(true)
+                    }
                     "syncConfig" -> {
                         val baseUrl = call.argument<String>("baseUrl")
                         val lastIncId = call.argument<Int>("lastIncidentId")
@@ -250,6 +284,7 @@ class SmokeGuardBgService : Service() {
 
             val launchIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(MainActivity.EXTRA_OPEN_TAB, "incidents")
             }
             val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

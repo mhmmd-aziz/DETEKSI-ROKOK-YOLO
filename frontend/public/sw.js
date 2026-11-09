@@ -1,5 +1,5 @@
 /* SmokeGuard AI — PWA & Hybrid FCM/Local Service Worker */
-const CACHE_NAME = 'smokeguard-pwa-v1'
+const CACHE_NAME = 'smokeguard-pwa-v2'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -14,8 +14,8 @@ self.addEventListener('push', (event) => {
   let payload = {
     title: 'PERINGATAN: Pelanggaran Merokok Terdeteksi',
     body: 'Terdeteksi aktivitas merokok pada kamera pengawas KTR.',
-    icon: '/icon.svg',
-    badge: '/icon.svg',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
     image: null,
     tag: 'smokeguard-alert',
     data: { url: '/' },
@@ -40,7 +40,7 @@ self.addEventListener('push', (event) => {
     badge: payload.badge,
     tag: payload.tag,
     renotify: true,
-    requireInteraction: true,
+    requireInteraction: false,
     vibrate: [250, 120, 250, 120, 400],
     data: payload.data,
   }
@@ -58,8 +58,8 @@ self.addEventListener('message', (event) => {
   const { title, body, image, tag, incident } = event.data.payload || {}
   const options = {
     body: body || 'Aktivitas merokok terkonfirmasi pada kawasan tanpa rokok.',
-    icon: '/icon.svg',
-    badge: '/icon.svg',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
     tag: tag || 'smokeguard-incident',
     renotify: true,
     requireInteraction: false,
@@ -88,9 +88,10 @@ self.addEventListener('notificationclick', (event) => {
       for (const client of clientList) {
         if ('focus' in client) {
           client.focus()
-          if (incidentData) {
-            client.postMessage({ type: 'OPEN_INCIDENT_MODAL', incident: incidentData })
-          }
+          client.postMessage({
+            type: 'NOTIFICATION_CLICK_OPEN_INCIDENTS',
+            incident: incidentData,
+          })
           return
         }
       }

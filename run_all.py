@@ -42,13 +42,12 @@ def main():
     print("  React Frontend : http://localhost:5173")
     print("  -------------------------------------------------------------")
     setup_adb_reverse()
-    print("  Akses PWA di HP via Kabel USB (Tanpa HTTPS):")
+    print("  Akses PWA di HP via Kabel USB (Single-Port Proxy 5173):")
     print("  1. Buka chrome://inspect/#devices di Chrome Laptop")
-    print("  2. Klik 'Port forwarding...' -> Tambahkan:")
+    print("  2. Klik 'Port forwarding...' -> Cukup pastikan ada:")
     print("     - Port 5173 -> localhost:5173")
-    print("     - Port 8000 -> localhost:8000")
     print("     (Centang 'Enable port forwarding')")
-    print("  3. Buka http://localhost:5173 di Chrome HP Android Anda")
+    print("  3. Buka http://localhost:5173 di Chrome / PWA HP Android Anda")
     print("===============================================================", flush=True)
 
     env = os.environ.copy()
@@ -66,7 +65,7 @@ def main():
 
     npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
     frontend_proc = subprocess.Popen(
-        [npm_cmd, "run", "dev", "--", "--host"],
+        [npm_cmd, "run", "dev"],
         cwd=str(FRONTEND_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

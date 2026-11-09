@@ -64,9 +64,13 @@ class DetectionEngine:
         self.consecutive_hits = 0
         self.incident_cooldown = 8.0  # seconds between confirmed snapshots
 
-        # Stream lifecycle management
+        # Stream lifecycle & multi-client broadcast management
         self.active_stream_id = 0
         self.stream_active = True
+        self.viewer_count = 0
+        self.producer_running = False
+        self.producer_lock = threading.Lock()
+        self.frame_seq = 0
 
         # Live telemetry state
         self.current_frame_idx = 0
@@ -87,7 +91,9 @@ class DetectionEngine:
         os.makedirs(Path(settings.MEDIA_ROOT) / "uploads", exist_ok=True)
 
     def invalidate_streams(self):
-        self.active_stream_id += 1
+        with self.producer_lock:
+            self.active_stream_id += 1
+            self.producer_running = False
 
     def set_source_mode(self, mode: str):
         if mode not in ("cctv_demo", "webcam", "custom_video"):
@@ -312,15 +318,7 @@ class DetectionEngine:
         except Exception as e:
             print("Snapshot save error:", e)
 
-    def generate_mjpeg(self, requested_source=None):
-        if requested_source in ("cctv_demo", "webcam", "custom_video"):
-            self.set_source_mode(requested_source)
-
-        self.stream_active = True
-        self.active_stream_id += 1
-        my_stream_id = self.active_stream_id
-        self.consecutive_hits = 0
-
+    def _producer_loop(self, my_stream_id):
         source = self.get_video_source()
         if source == 0:
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -331,7 +329,11 @@ class DetectionEngine:
         frame_idx = 0
 
         try:
-            while self.stream_active and self.active_stream_id == my_stream_id:
+            while (
+                self.stream_active
+                and self.active_stream_id == my_stream_id
+                and self.viewer_count > 0
+            ):
                 cfg_sig = (
                     round(self.conf_threshold, 3),
                     self.two_stage,
@@ -348,12 +350,8 @@ class DetectionEngine:
                         if ok:
                             self.last_jpeg = buffer.tobytes()
                             self.last_config_signature = cfg_sig
-                    if self.last_jpeg is not None:
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n" + self.last_jpeg + b"\r\n"
-                        )
-                    time.sleep(0.08)
+                            self.frame_seq += 1
+                    time.sleep(0.06)
                     continue
 
                 ret, frame = cap.read()
@@ -376,15 +374,57 @@ class DetectionEngine:
                 if not ok:
                     continue
 
-                jpeg_bytes = buffer.tobytes()
-                self.last_jpeg = jpeg_bytes
+                self.last_jpeg = buffer.tobytes()
                 self.last_config_signature = cfg_sig
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
-                )
+                self.frame_seq += 1
+                time.sleep(0.01)
         finally:
             cap.release()
+            with self.producer_lock:
+                if self.active_stream_id == my_stream_id:
+                    self.producer_running = False
+
+    def _ensure_producer_running(self):
+        with self.producer_lock:
+            if not self.producer_running:
+                self.stream_active = True
+                self.active_stream_id += 1
+                my_stream_id = self.active_stream_id
+                self.consecutive_hits = 0
+                self.producer_running = True
+                t = threading.Thread(
+                    target=self._producer_loop, args=(my_stream_id,), daemon=True
+                )
+                t.start()
+
+    def generate_mjpeg(self, requested_source=None):
+        if requested_source in ("cctv_demo", "webcam", "custom_video"):
+            self.set_source_mode(requested_source)
+
+        self.stream_active = True
+        self.viewer_count += 1
+        self._ensure_producer_running()
+        my_stream_id = self.active_stream_id
+        last_sent_seq = -1
+
+        try:
+            while self.stream_active and self.active_stream_id == my_stream_id:
+                if not self.producer_running:
+                    self._ensure_producer_running()
+                    my_stream_id = self.active_stream_id
+
+                if self.last_jpeg is not None and (self.frame_seq != last_sent_seq or self.paused):
+                    last_sent_seq = self.frame_seq
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + self.last_jpeg + b"\r\n"
+                    )
+                    if self.paused:
+                        time.sleep(0.1)
+                else:
+                    time.sleep(0.02)
+        finally:
+            self.viewer_count = max(0, self.viewer_count - 1)
 
     def stop_active_stream(self):
         self.stream_active = False

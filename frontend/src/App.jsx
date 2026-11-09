@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 
-const API_BASE = `http://${window.location.hostname || 'localhost'}:8000`
+// Gunakan relative path ('') agar semua request /api dan /media otomatis lewat proxy port 5173 (Vite).
+// Dengan begitu, HP Android (via USB Debugging / Wi-Fi) cukup terhubung ke port 5173 saja!
+const API_BASE = ''
 
 /* Clean SVG Icon Components (Zero Emojis) */
 const IconShieldCheck = () => (
@@ -262,41 +264,54 @@ export default function App() {
   const [notifToast, setNotifToast] = useState('')
   const fileInputRef = useRef(null)
   const lastNotifiedIncidentIdRef = useRef(null)
+  const hasSyncedConfigRef = useRef(false)
 
   const dispatchSwNotification = async (payload) => {
     playAlertTone()
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
       return
     }
+    const fullImage = payload.image
+      ? payload.image.startsWith('http')
+        ? payload.image
+        : `${window.location.origin}${payload.image}`
+      : undefined
+
+    const notifOptions = {
+      body: payload.body || 'Aktivitas merokok terkonfirmasi pada kawasan tanpa rokok.',
+      icon: `${window.location.origin}/icon-192.png`,
+      badge: `${window.location.origin}/icon-192.png`,
+      vibrate: [250, 120, 250, 120, 400],
+      tag: payload.tag || `smokeguard-${Date.now()}`,
+      renotify: true,
+      requireInteraction: false,
+      data: { url: '/' },
+    }
+    if (fullImage) {
+      notifOptions.image = fullImage
+    }
+
     try {
       if ('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.ready
+        if (reg && typeof reg.showNotification === 'function') {
+          await reg.showNotification(
+            payload.title || 'PELANGGARAN KTR TERKONFIRMASI',
+            notifOptions
+          )
+          return
+        }
         if (reg && reg.active) {
           reg.active.postMessage({
             type: 'SHOW_INCIDENT_NOTIFICATION',
-            payload,
-          })
-          return
-        }
-        if (reg && reg.showNotification) {
-          await reg.showNotification(payload.title || 'PELANGGARAN KTR TERKONFIRMASI', {
-            body: payload.body,
-            icon: '/icon.svg',
-            badge: '/icon.svg',
-            image: payload.image || undefined,
-            vibrate: [250, 120, 250, 120, 400],
-            tag: payload.tag || 'smokeguard-incident',
-            renotify: true,
+            payload: { ...payload, image: fullImage },
           })
           return
         }
       }
-      new Notification(payload.title || 'PELANGGARAN KTR TERKONFIRMASI', {
-        body: payload.body,
-        icon: '/icon.svg',
-      })
+      new Notification(payload.title || 'PELANGGARAN KTR TERKONFIRMASI', notifOptions)
     } catch (e) {
-      console.error(e)
+      console.error('Notification error:', e)
     }
   }
 
@@ -310,7 +325,7 @@ export default function App() {
       setNotifPermission(perm)
       if (perm === 'granted') {
         const deviceToken = `pwa-usb-${navigator.userAgent.slice(0, 32).replace(/\s+/g, '_')}-${Date.now()}`
-        await fetch(`${API_BASE}/api/notifications/register/`, {
+        fetch(`${API_BASE}/api/notifications/register/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -345,10 +360,10 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/notifications/test/`, {
         method: 'POST',
-      })
-      const data = res.ok ? await res.json() : {}
+      }).catch(() => null)
+      const data = res && res.ok ? await res.json().catch(() => ({})) : {}
       const latestSnap = incidents[0]?.snapshot_url
-        ? `${API_BASE}${incidents[0].snapshot_url}`
+        ? `${window.location.origin}${incidents[0].snapshot_url}`
         : undefined
       await dispatchSwNotification({
         title: data.title || 'UJI NOTIFIKASI SMOKEGUARD AI',
@@ -379,6 +394,15 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/status/`)
       if (res.ok) {
         const data = await res.json()
+        if (!hasSyncedConfigRef.current) {
+          hasSyncedConfigRef.current = true
+          if (data.source_mode) setSourceMode(data.source_mode)
+          if (typeof data.conf_threshold === 'number') setConfThreshold(data.conf_threshold)
+          if (typeof data.min_consecutive_frames === 'number') setMinConsecutiveFrames(data.min_consecutive_frames)
+          if (typeof data.two_stage === 'boolean') setTwoStage(data.two_stage)
+          if (typeof data.show_person_box === 'boolean') setShowPersonBox(data.show_person_box)
+          if (typeof data.paused === 'boolean') setPaused(data.paused)
+        }
         setStatus((prev) => ({
           ...prev,
           camera_name: data.camera_name,
@@ -408,7 +432,7 @@ export default function App() {
               body: `Terdeteksi ${inc.cigarette_count} titik rokok (${inc.person_count} orang) di ${inc.location} • Conf ${Math.round(
                 (inc.max_confidence || 0) * 100
               )}%`,
-              image: inc.snapshot_url ? `${API_BASE}${inc.snapshot_url}` : undefined,
+              image: inc.snapshot_url ? `${window.location.origin}${inc.snapshot_url}` : undefined,
               tag: `smokeguard-inc-${inc.id}`,
             })
             fetchIncidents()
@@ -450,8 +474,9 @@ export default function App() {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js')
-        .then(() => {
+        .then((reg) => {
           setSwReady(true)
+          reg.update().catch(() => {})
         })
         .catch(() => {})
 
@@ -469,19 +494,6 @@ export default function App() {
     }
     window.addEventListener('beforeinstallprompt', handleBeforeInstall)
 
-    fetch(`${API_BASE}/api/config/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source_mode: 'cctv_demo',
-        conf_threshold: 0.45,
-        min_consecutive_frames: 12,
-        two_stage: true,
-        show_person_box: true,
-        paused: false,
-      }),
-    }).catch(() => {})
-
     fetchStatus()
     fetchIncidents()
     fetchMetrics()
@@ -498,14 +510,16 @@ export default function App() {
   const handleSwitchMainTab = async (tabName) => {
     setActiveTab(tabName)
     if (tabName !== 'monitor') {
-      try {
-        await fetch(`${API_BASE}/api/config/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stop_stream: true }),
-        })
-      } catch (err) {
-        // ignore
+      if (sourceMode === 'webcam') {
+        try {
+          await fetch(`${API_BASE}/api/config/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stop_stream: true }),
+          })
+        } catch (err) {
+          // ignore
+        }
       }
     } else {
       setStreamKey(Date.now())

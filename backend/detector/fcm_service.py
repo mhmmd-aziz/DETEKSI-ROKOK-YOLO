@@ -74,3 +74,4 @@ def dispatch_fcm_background(incident_dict):
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
+

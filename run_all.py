@@ -1,6 +1,8 @@
 import os
+import re
 import sys
 import signal
+import socket
 import subprocess
 import threading
 from pathlib import Path
@@ -8,9 +10,67 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT_DIR / "backend"
 FRONTEND_DIR = ROOT_DIR / "frontend"
+FLUTTER_MAIN_DART = ROOT_DIR / "mobile_app" / "lib" / "main.dart"
 PYTHON_EXE = r"d:\ml\miniconda3\envs\mlenv\python.exe"
 if not os.path.exists(PYTHON_EXE):
     PYTHON_EXE = sys.executable
+
+
+def detect_laptop_ips():
+    """Deteksi semua IPv4 aktif di Laptop (Wi-Fi, Hotspot HP ke Laptop, atau Ethernet)."""
+    ips = []
+    # Metode 1: UDP socket ke publik untuk mendapat IP interface utama (Wi-Fi / Hotspot aktif)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("8.8.8.8", 80))
+        primary_ip = s.getsockname()[0]
+        s.close()
+        if primary_ip and not primary_ip.startswith("127."):
+            ips.append(primary_ip)
+    except Exception:
+        pass
+
+    # Metode 2: Semua interface lokal
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+
+    # Urutkan agar IP Wi-Fi / Hotspot HP (192.168.x.x / 172.20.10.x / 10.x.x.x) berada di urutan pertama
+    def ip_priority(ip_str):
+        if ip_str.startswith("192.168."):
+            return 0
+        if ip_str.startswith("172.20.10."):
+            return 1
+        if ip_str.startswith("10."):
+            return 2
+        return 3
+
+    ips.sort(key=ip_priority)
+    return ips if ips else ["127.0.0.1"]
+
+
+def sync_ip_to_flutter(primary_ip):
+    """Otomatis perbarui kandidat IP Wi-Fi/Hotspot di mobile_app/lib/main.dart."""
+    if not primary_ip or primary_ip == "127.0.0.1" or not FLUTTER_MAIN_DART.exists():
+        return
+    try:
+        content = FLUTTER_MAIN_DART.read_text(encoding="utf-8")
+        updated = re.sub(
+            r"const String kDefaultLanServerUrl = 'http://[^']+';",
+            f"const String kDefaultLanServerUrl = 'http://{primary_ip}:8000';",
+            content,
+        )
+        if updated != content:
+            FLUTTER_MAIN_DART.write_text(updated, encoding="utf-8")
+            print(f"  [AUTO-IP] Default IP di Flutter diperbarui ke: http://{primary_ip}:8000")
+    except Exception:
+        pass
 
 
 def stream_output(pipe, prefix):
@@ -47,11 +107,19 @@ def setup_adb_reverse():
 
 
 def main():
+    laptop_ips = detect_laptop_ips()
+    primary_ip = laptop_ips[0]
+    sync_ip_to_flutter(primary_ip)
+
     print("===============================================================")
     print("  SmokeGuard AI - Single Terminal Runner (Backend + Web + Flutter)")
-    print("  Django Backend : http://127.0.0.1:8000 (LAN: 0.0.0.0:8000)")
-    print("  React Web UI   : http://localhost:5173")
-    print("  Flutter App    : mobile_app/ (Android FCM + Heads-Up Alert)")
+    print("  Django Backend (USB)    : http://127.0.0.1:8000")
+    print(f"  Django Backend (Wi-Fi)  : http://{primary_ip}:8000")
+    if len(laptop_ips) > 1:
+        other_ips = ", ".join(f"http://{ip}:8000" for ip in laptop_ips[1:])
+        print(f"  IP Jaringan Lainnya     : {other_ips}")
+    print("  React Web UI (Laptop)   : http://localhost:5173")
+    print("  Flutter App             : mobile_app/ (Auto-Scan Wi-Fi / Hotspot / USB)")
     print("  -------------------------------------------------------------")
     setup_adb_reverse()
     print("===============================================================", flush=True)

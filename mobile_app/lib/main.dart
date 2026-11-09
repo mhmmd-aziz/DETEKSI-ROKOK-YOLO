@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -8,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+const String kDefaultLanServerUrl = 'http://192.168.1.138:8000';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -192,6 +195,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Uint8List? _latestFrameBytes;
   List<Map<String, dynamic>> _incidents = [];
   Map<String, dynamic>? _metrics;
+  List<String> _detectedServerIps = [];
 
   int? _lastNotifiedIncidentId;
   bool _hasSyncedInitialConfig = false;
@@ -209,6 +213,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _initConnectionAndFcm();
   }
 
+  String _normalizeServerUrl(String raw) {
+    var s = raw.trim().replaceAll(RegExp(r'/$'), '');
+    if (s.isEmpty) return 'http://127.0.0.1:8000';
+    if (!s.startsWith('http://') && !s.startsWith('https://')) {
+      s = 'http://$s';
+    }
+    final uri = Uri.tryParse(s);
+    if (uri != null && !uri.hasPort) {
+      s = '$s:8000';
+    }
+    return s;
+  }
+
+  Future<String?> _discoverLaptopIpOnNetwork() async {
+    final subnets = <String>{};
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final ip = addr.address;
+          final parts = ip.split('.');
+          if (parts.length == 4 &&
+              (ip.startsWith('192.168.') ||
+                  ip.startsWith('172.') ||
+                  ip.startsWith('10.'))) {
+            subnets.add('${parts[0]}.${parts[1]}.${parts[2]}');
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Tambahkan subnet umum Hotspot HP (Android / iPhone / Windows Mobile Hotspot)
+    final defaultUri = Uri.tryParse(kDefaultLanServerUrl);
+    if (defaultUri != null) {
+      final dp = defaultUri.host.split('.');
+      if (dp.length == 4) {
+        subnets.add('${dp[0]}.${dp[1]}.${dp[2]}');
+      }
+    }
+    subnets.addAll(['192.168.43', '192.168.137', '172.20.10']);
+
+    for (final subnet in subnets) {
+      for (int start = 1; start <= 254; start += 45) {
+        final end = (start + 44 > 254) ? 254 : start + 44;
+        final futures = <Future<String?>>[];
+        for (int host = start; host <= end; host++) {
+          final candidateUrl = 'http://$subnet.$host:8000';
+          futures.add(() async {
+            try {
+              final r = await http
+                  .get(Uri.parse('$candidateUrl/api/status/'))
+                  .timeout(const Duration(milliseconds: 450));
+              if (r.statusCode == 200 && r.body.contains('camera_name')) {
+                return candidateUrl;
+              }
+            } catch (_) {}
+            return null;
+          }());
+        }
+        final results = await Future.wait(futures);
+        for (final found in results) {
+          if (found != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('server_base_url', found);
+            if (mounted) {
+              setState(() {
+                _baseUrl = found;
+                _connected = true;
+              });
+            }
+            return found;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   Future<void> _initConnectionAndFcm() async {
     final prefs = await SharedPreferences.getInstance();
     final savedLastId = prefs.getInt('last_notified_incident_id');
@@ -216,27 +301,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _lastNotifiedIncidentId = savedLastId;
     }
     final savedUrl = prefs.getString('server_base_url');
-    if (savedUrl != null && savedUrl.isNotEmpty) {
-      _baseUrl = savedUrl;
-    } else {
-      // Auto-probe USB localhost (127.0.0.1:8000) then LAN IP (192.168.1.138:8000)
-      final candidates = [
-        'http://127.0.0.1:8000',
-        'http://192.168.1.138:8000',
-        'http://10.0.2.2:8000',
-      ];
-      for (final c in candidates) {
-        try {
-          final r = await http
-              .get(Uri.parse('$c/api/status/'))
-              .timeout(const Duration(milliseconds: 900));
-          if (r.statusCode == 200) {
-            _baseUrl = c;
-            await prefs.setString('server_base_url', c);
-            break;
-          }
-        } catch (_) {}
+    final candidates = <String>[
+      if (savedUrl != null && savedUrl.isNotEmpty) savedUrl,
+      'http://127.0.0.1:8000',
+      kDefaultLanServerUrl,
+      'http://10.0.2.2:8000',
+    ];
+
+    bool foundQuick = false;
+    for (final c in candidates.toSet()) {
+      try {
+        final r = await http
+            .get(Uri.parse('$c/api/status/'))
+            .timeout(const Duration(milliseconds: 800));
+        if (r.statusCode == 200) {
+          _baseUrl = c;
+          await prefs.setString('server_base_url', c);
+          foundQuick = true;
+          break;
+        }
+      } catch (_) {}
+    }
+
+    if (!foundQuick) {
+      if (savedUrl != null && savedUrl.isNotEmpty) {
+        _baseUrl = savedUrl;
       }
+      // Otomatis scan jaringan Wi-Fi / Hotspot HP di background jika IP berubah
+      _discoverLaptopIpOnNetwork();
     }
 
     // Setup FCM if available
@@ -393,6 +485,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _statusText = data['status'] ?? 'AMAN';
             _deviceName = data['device_name'] ?? _deviceName;
             _totalIncidents = (data['total_incidents'] ?? 0) as int;
+            final rawIps = data['server_ips'] as List?;
+            if (rawIps != null) {
+              _detectedServerIps = rawIps.map((e) => e.toString()).toList();
+            }
 
             if (!_hasSyncedInitialConfig) {
               _hasSyncedInitialConfig = true;
@@ -527,74 +623,145 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _showServerConfigDialog() {
     final controller = TextEditingController(text: _baseUrl);
+    bool isScanning = false;
+    String scanMessage = '';
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text(
-          'Pengaturan Koneksi Server',
-          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Pilih mode koneksi ke Backend Django (Port 8000):',
-              style: TextStyle(fontSize: 13, color: Color(0xFF476658)),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              decoration: InputDecoration(
-                labelText: 'URL Backend Django',
-                hintText: 'http://127.0.0.1:8000',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: const Text(
+            'Pengaturan Koneksi Server',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ActionChip(
-                  label: const Text('USB (127.0.0.1:8000)'),
-                  onPressed: () =>
-                      controller.text = 'http://127.0.0.1:8000',
+                const Text(
+                  'Masukkan IP Laptop (Wi-Fi / Hotspot HP) atau pilih USB:',
+                  style: TextStyle(fontSize: 12.5, color: Color(0xFF476658)),
                 ),
-                ActionChip(
-                  label: const Text('Wi-Fi LAN (192.168.1.138)'),
-                  onPressed: () =>
-                      controller.text = 'http://192.168.1.138:8000',
+                const SizedBox(height: 10),
+                TextField(
+                  controller: controller,
+                  decoration: InputDecoration(
+                    labelText: 'IP Laptop / URL Backend (Port 8000)',
+                    hintText: 'Contoh: 192.168.43.105 atau http://127.0.0.1:8000',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: isScanning
+                        ? null
+                        : () async {
+                            setDialogState(() {
+                              isScanning = true;
+                              scanMessage =
+                                  'Mencari IP Laptop di Wi-Fi / Hotspot HP...';
+                            });
+                            final found = await _discoverLaptopIpOnNetwork();
+                            if (!ctx.mounted) return;
+                            setDialogState(() {
+                              isScanning = false;
+                              if (found != null) {
+                                controller.text = found;
+                                scanMessage = 'Berhasil ditemukan: $found';
+                              } else {
+                                scanMessage =
+                                    'IP tidak ditemukan otomatis. Pastikan Laptop & HP di jaringan/hotspot yang sama.';
+                              }
+                            });
+                          },
+                    icon: isScanning
+                        ? const SizedBox(
+                            width: 15,
+                            height: 15,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.wifi_find_rounded, size: 18),
+                    label: Text(
+                      isScanning
+                          ? 'Memindai Jaringan...'
+                          : 'Scan Otomatis IP Laptop (Wi-Fi / Hotspot)',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+                ),
+                if (scanMessage.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    scanMessage,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: scanMessage.startsWith('Berhasil')
+                          ? const Color(0xFF059669)
+                          : const Color(0xFFDC2626),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ActionChip(
+                      label: const Text('Kabel USB (127.0.0.1:8000)'),
+                      onPressed: () =>
+                          controller.text = 'http://127.0.0.1:8000',
+                    ),
+                    ActionChip(
+                      label: Text(
+                        'Default LAN (${Uri.tryParse(kDefaultLanServerUrl)?.host ?? '192.168.1.138'})',
+                      ),
+                      onPressed: () => controller.text = kDefaultLanServerUrl,
+                    ),
+                    for (final ip in _detectedServerIps)
+                      if ('http://$ip:8000' != kDefaultLanServerUrl)
+                        ActionChip(
+                          label: Text('IP Laptop ($ip:8000)'),
+                          onPressed: () =>
+                              controller.text = 'http://$ip:8000',
+                        ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Batal'),
           ),
-          FilledButton(
-            onPressed: () async {
-              final nextUrl = controller.text.trim().replaceAll(RegExp(r'/$'), '');
-              if (nextUrl.isNotEmpty) {
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final nextUrl = _normalizeServerUrl(controller.text);
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.setString('server_base_url', nextUrl);
-                setState(() {
-                  _baseUrl = nextUrl;
-                });
+                if (mounted) {
+                  setState(() {
+                    _baseUrl = nextUrl;
+                  });
+                }
                 _fetchStatus();
                 _fetchIncidents();
-              }
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Simpan'),
-          ),
-        ],
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
       ),
     );
   }

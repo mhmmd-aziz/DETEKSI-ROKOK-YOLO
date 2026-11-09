@@ -1,3 +1,3 @@
 @echo off
-title SmokeGuard AI - Single Terminal (Django + React)
-d:\ml\miniconda3\envs\mlenv\python.exe "%~dp0run_all.py"
+title SmokeGuard AI - All-in-One Launcher (Auto-IP Wi-Fi / Hotspot / USB)
+powershell -ExecutionPolicy Bypass -File "%~dp0start_all.ps1"

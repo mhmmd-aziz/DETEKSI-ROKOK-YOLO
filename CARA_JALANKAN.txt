@@ -1,0 +1,63 @@
+======================================================================
+PANDUAN LENGKAP MENJALANKAN SMOKEGUARD AI (WEB + FLUTTER + AUTO-IP)
+======================================================================
+
+1. JALANKAN SEMUA SERVER (1 TERMINAL POWERSHELL)
+----------------------------------------------------------------------
+Buka PowerShell di folder proyek ini, lalu ketik:
+
+    powershell -ExecutionPolicy Bypass -File .\start_all.ps1
+
+Atau jalankan lewat Python:
+
+    d:\ml\miniconda3\envs\mlenv\python.exe run_all.py
+
+Script ini secara otomatis akan:
+- Mendeteksi IP Laptop saat ini (baik dari Wi-Fi maupun dari Hotspot HP ke Laptop).
+- Mengubah default IP di aplikasi Flutter sesuai jaringan aktif.
+- Mengaktifkan jalur USB (adb reverse tcp:8000 tcp:8000).
+- Menjalankan Backend Django (Port 8000) dan Web React (Port 5173).
+
+
+2. CARA KONEKSI DARI HOTSPOT HP KE LAPTOP / WI-FI BERBEDA
+----------------------------------------------------------------------
+Jika Anda berpindah Wi-Fi atau menyalakan Hotspot dari HP ke Laptop:
+
+Langkah 1:
+Nyalakan Hotspot di HP -> Sambungkan Wi-Fi Laptop ke Hotspot HP Anda.
+
+Langkah 2:
+Jalankan `powershell -ExecutionPolicy Bypass -File .\start_all.ps1` di Laptop.
+Lihat baris di terminal:
+   Django Backend (Wi-Fi) : http://192.168.xxx.xxx:8000
+
+Langkah 3 (Di Aplikasi Flutter HP):
+- Buka aplikasi SmokeGuard AI di HP.
+- Tekan ikon Pengaturan Server (ikon jaringan di pojok kanan atas).
+- Tekan tombol "Scan Otomatis IP Laptop (Wi-Fi / Hotspot)" -> aplikasi akan
+  mencari IP Laptop secara otomatis!
+- Atau ketik langsung angka IP Laptop yang muncul di terminal (contoh: 192.168.43.105)
+  lalu tekan "Simpan".
+
+
+3. JIKA KONEKSI WI-FI / HOTSPOT TERTAHAN FIREWALL WINDOWS
+----------------------------------------------------------------------
+Jika pakai Kabel USB (127.0.0.1:8000), Anda TIDAK terkena Firewall.
+Namun jika pakai Wi-Fi / Hotspot HP dan loading terus, jalankan perintah ini
+1 kali saja di PowerShell (Run as Administrator):
+
+    netsh advfirewall firewall add rule name="SmokeGuard_Django_8000" dir=in action=allow protocol=TCP localport=8000
+
+
+4. PERINTAH CEPAT BUILD & INSTALL APK FLUTTER KE HP
+----------------------------------------------------------------------
+- Install APK yang sudah jadi ke HP via USB:
+    powershell -ExecutionPolicy Bypass -File .\start_all.ps1 -InstallApk
+
+- Build ulang APK dengan IP terbaru + Install ke HP:
+    powershell -ExecutionPolicy Bypass -File .\start_all.ps1 -BuildApk
+
+- Lokasi file APK jika ingin copy manual / kirim ke HP:
+    d:\semester 5\PRAK PCD\PROYEK TA\mobile_app\build\app\outputs\flutter-apk\app-debug.apk
+======================================================================
+

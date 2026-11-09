@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import socket
 from pathlib import Path
 
 import cv2
@@ -12,6 +13,29 @@ from django.views.decorators.csrf import csrf_exempt
 from .engine import DetectionEngine
 from .models import SmokingIncident, DeviceToken
 from .fcm_service import dispatch_fcm_background
+
+
+def _get_laptop_ips():
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.3)
+        s.connect(("8.8.8.8", 80))
+        primary_ip = s.getsockname()[0]
+        s.close()
+        if primary_ip and not primary_ip.startswith("127."):
+            ips.append(primary_ip)
+    except Exception:
+        pass
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and not ip.startswith("169.254.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
 
 
 def stream_video(request):
@@ -43,6 +67,7 @@ def get_status(request):
     data["total_incidents"] = total_incidents
     data["latest_incident"] = latest.to_dict() if latest else None
     data["registered_devices"] = DeviceToken.objects.filter(is_active=True).count()
+    data["server_ips"] = _get_laptop_ips()
     return JsonResponse(data)
 
 

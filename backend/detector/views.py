@@ -11,7 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .engine import DetectionEngine
 from .models import SmokingIncident, DeviceToken
-from .fcm_service import dispatch_fcm_background
+from .fcm_service import dispatch_fcm_background, get_vapid_public_key
 
 
 def stream_video(request):
@@ -33,6 +33,7 @@ def get_status(request):
     data["total_incidents"] = total_incidents
     data["latest_incident"] = latest.to_dict() if latest else None
     data["registered_devices"] = DeviceToken.objects.filter(is_active=True).count()
+    data["vapid_public_key"] = get_vapid_public_key()
     return JsonResponse(data)
 
 

@@ -89,6 +89,7 @@ class DetectionEngine:
 
         os.makedirs(Path(settings.MEDIA_ROOT) / "snapshots", exist_ok=True)
         os.makedirs(Path(settings.MEDIA_ROOT) / "uploads", exist_ok=True)
+        self._ensure_producer_running()
 
     def invalidate_streams(self):
         with self.producer_lock:
@@ -103,6 +104,8 @@ class DetectionEngine:
             self.paused = False
             self.consecutive_hits = 0
             self.invalidate_streams()
+            if mode != "webcam":
+                self._ensure_producer_running()
         if mode == "webcam":
             self.camera_name = "CAM 02 - Live Kamera Webcam"
         elif mode == "custom_video":
@@ -332,7 +335,7 @@ class DetectionEngine:
             while (
                 self.stream_active
                 and self.active_stream_id == my_stream_id
-                and self.viewer_count > 0
+                and (source != 0 or self.viewer_count > 0)
             ):
                 cfg_sig = (
                     round(self.conf_threshold, 3),

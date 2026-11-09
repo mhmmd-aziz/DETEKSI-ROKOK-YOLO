@@ -24,30 +24,36 @@ def stream_output(pipe, prefix):
 
 
 def setup_adb_reverse():
-    try:
-        res1 = subprocess.run(["adb", "reverse", "tcp:5173", "tcp:5173"], capture_output=True, text=True, timeout=3)
-        res2 = subprocess.run(["adb", "reverse", "tcp:8000", "tcp:8000"], capture_output=True, text=True, timeout=3)
-        if res1.returncode == 0 and res2.returncode == 0:
-            print("  [USB ADB] Port Forwarding otomatis aktif via ADB Reverse (5173 & 8000)")
-            return True
-    except Exception:
-        pass
+    adb_candidates = [
+        "adb",
+        os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
+        r"D:\mobile_app\Android\Sdk\platform-tools\adb.exe",
+        r"C:\Android\sdk\platform-tools\adb.exe",
+    ]
+    for adb_bin in adb_candidates:
+        try:
+            res = subprocess.run(
+                [adb_bin, "reverse", "tcp:8000", "tcp:8000"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            if res.returncode == 0:
+                print("  [USB ADB] Port Forwarding otomatis aktif: tcp:8000 -> tcp:8000 (Flutter USB Ready)")
+                return True
+        except Exception:
+            continue
     return False
 
 
 def main():
     print("===============================================================")
-    print("  SmokeGuard AI - Single Terminal Runner (PWA + USB Ready)")
-    print("  Django Backend : http://localhost:8000")
-    print("  React Frontend : http://localhost:5173")
+    print("  SmokeGuard AI - Single Terminal Runner (Backend + Web + Flutter)")
+    print("  Django Backend : http://127.0.0.1:8000 (LAN: 0.0.0.0:8000)")
+    print("  React Web UI   : http://localhost:5173")
+    print("  Flutter App    : mobile_app/ (Android FCM + Heads-Up Alert)")
     print("  -------------------------------------------------------------")
     setup_adb_reverse()
-    print("  Akses PWA di HP via Kabel USB (Single-Port Proxy 5173):")
-    print("  1. Buka chrome://inspect/#devices di Chrome Laptop")
-    print("  2. Klik 'Port forwarding...' -> Cukup pastikan ada:")
-    print("     - Port 5173 -> localhost:5173")
-    print("     (Centang 'Enable port forwarding')")
-    print("  3. Buka http://localhost:5173 di Chrome / PWA HP Android Anda")
     print("===============================================================", flush=True)
 
     env = os.environ.copy()

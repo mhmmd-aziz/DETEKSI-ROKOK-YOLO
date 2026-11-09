@@ -6,12 +6,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 from django.conf import settings
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from .engine import DetectionEngine
 from .models import SmokingIncident, DeviceToken
-from .fcm_service import dispatch_fcm_background, get_vapid_public_key
+from .fcm_service import dispatch_fcm_background
 
 
 def stream_video(request):
@@ -25,6 +25,16 @@ def stream_video(request):
     return response
 
 
+def get_latest_frame(request):
+    engine = DetectionEngine()
+    engine._ensure_producer_running()
+    if engine.last_jpeg is None:
+        return HttpResponse(status=204)
+    response = HttpResponse(engine.last_jpeg, content_type="image/jpeg")
+    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
+
 def get_status(request):
     engine = DetectionEngine()
     data = engine.get_status_dict()
@@ -33,7 +43,6 @@ def get_status(request):
     data["total_incidents"] = total_incidents
     data["latest_incident"] = latest.to_dict() if latest else None
     data["registered_devices"] = DeviceToken.objects.filter(is_active=True).count()
-    data["vapid_public_key"] = get_vapid_public_key()
     return JsonResponse(data)
 
 

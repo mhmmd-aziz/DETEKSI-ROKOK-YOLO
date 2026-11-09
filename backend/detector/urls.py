@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path("stream/", views.stream_video, name="stream_video"),
+    path("frame/", views.get_latest_frame, name="get_latest_frame"),
     path("status/", views.get_status, name="get_status"),
     path("config/", views.update_config, name="update_config"),
     path("incidents/", views.incidents_view, name="incidents_view"),

@@ -296,7 +296,7 @@ class DetectionEngine:
             full_path = Path(settings.MEDIA_ROOT) / "snapshots" / filename
             cv2.imwrite(str(full_path), vis_frame)
 
-            SmokingIncident.objects.create(
+            inc = SmokingIncident.objects.create(
                 camera_name=self.camera_name,
                 location=self.location,
                 frame_number=frame_idx,
@@ -307,6 +307,8 @@ class DetectionEngine:
                 detection_mode="Two-Stage YOLOv8" if self.two_stage else "Single-Stage YOLOv8",
                 snapshot_url=rel_url,
             )
+            from .fcm_service import dispatch_fcm_background
+            dispatch_fcm_background(inc.to_dict())
         except Exception as e:
             print("Snapshot save error:", e)
 

@@ -10,7 +10,8 @@ from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from .engine import DetectionEngine
-from .models import SmokingIncident
+from .models import SmokingIncident, DeviceToken
+from .fcm_service import dispatch_fcm_background
 
 
 def stream_video(request):
@@ -28,7 +29,10 @@ def get_status(request):
     engine = DetectionEngine()
     data = engine.get_status_dict()
     total_incidents = SmokingIncident.objects.count()
+    latest = SmokingIncident.objects.first()
     data["total_incidents"] = total_incidents
+    data["latest_incident"] = latest.to_dict() if latest else None
+    data["registered_devices"] = DeviceToken.objects.filter(is_active=True).count()
     return JsonResponse(data)
 
 
@@ -99,6 +103,64 @@ def manual_capture(request):
 
     latest = SmokingIncident.objects.first()
     return JsonResponse({"ok": True, "incident": latest.to_dict() if latest else None})
+
+
+@csrf_exempt
+def register_notification_device(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    try:
+        body = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        body = {}
+
+    token = body.get("token", "").strip()
+    if not token:
+        return JsonResponse({"error": "Token wajib diisi"}, status=400)
+
+    device_label = body.get("device_label", "Perangkat Pengawas PWA")
+    platform = body.get("platform", "PWA Localhost / USB")
+
+    obj, _ = DeviceToken.objects.update_or_create(
+        token=token,
+        defaults={
+            "device_label": device_label[:120],
+            "platform": platform[:60],
+            "is_active": True,
+        },
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "device": obj.to_dict(),
+            "registered_devices": DeviceToken.objects.filter(is_active=True).count(),
+        }
+    )
+
+
+@csrf_exempt
+def test_notification(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    engine = DetectionEngine()
+    latest = SmokingIncident.objects.first()
+    payload = latest.to_dict() if latest else {
+        "id": 0,
+        "camera_name": engine.camera_name,
+        "location": engine.location,
+        "timestamp": "Simulasi Uji Notifikasi",
+        "frame_number": engine.current_frame_idx,
+        "person_count": max(1, engine.person_count),
+        "smoker_count": 1,
+        "cigarette_count": max(1, engine.cigarette_count),
+        "max_confidence": max(0.85, engine.max_confidence),
+        "detection_mode": "Two-Stage YOLOv8",
+        "snapshot_url": "",
+    }
+    dispatch_fcm_background(payload)
+    return JsonResponse({"ok": True, "payload": payload})
 
 
 @csrf_exempt

@@ -20,3 +20,4 @@ python run_all.py
 Atau klik 2x pada file `start_dashboard.bat`.
 - **React Frontend:** `http://localhost:5173`
 - **Django Backend API:** `http://127.0.0.1:8000`
+

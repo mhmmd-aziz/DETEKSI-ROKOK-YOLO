@@ -23,18 +23,39 @@ def stream_output(pipe, prefix):
         pass
 
 
+def setup_adb_reverse():
+    try:
+        res1 = subprocess.run(["adb", "reverse", "tcp:5173", "tcp:5173"], capture_output=True, text=True, timeout=3)
+        res2 = subprocess.run(["adb", "reverse", "tcp:8000", "tcp:8000"], capture_output=True, text=True, timeout=3)
+        if res1.returncode == 0 and res2.returncode == 0:
+            print("  [USB ADB] Port Forwarding otomatis aktif via ADB Reverse (5173 & 8000)")
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
     print("===============================================================")
-    print("  SmokeGuard AI - Single Terminal Runner (Backend + Frontend)")
-    print("  Django Backend : http://127.0.0.1:8000")
+    print("  SmokeGuard AI - Single Terminal Runner (PWA + USB Ready)")
+    print("  Django Backend : http://localhost:8000")
     print("  React Frontend : http://localhost:5173")
+    print("  -------------------------------------------------------------")
+    setup_adb_reverse()
+    print("  Akses PWA di HP via Kabel USB (Tanpa HTTPS):")
+    print("  1. Buka chrome://inspect/#devices di Chrome Laptop")
+    print("  2. Klik 'Port forwarding...' -> Tambahkan:")
+    print("     - Port 5173 -> localhost:5173")
+    print("     - Port 8000 -> localhost:8000")
+    print("     (Centang 'Enable port forwarding')")
+    print("  3. Buka http://localhost:5173 di Chrome HP Android Anda")
     print("===============================================================", flush=True)
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
 
     backend_proc = subprocess.Popen(
-        [PYTHON_EXE, "manage.py", "runserver", "127.0.0.1:8000", "--noreload"],
+        [PYTHON_EXE, "manage.py", "runserver", "0.0.0.0:8000", "--noreload"],
         cwd=str(BACKEND_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -45,7 +66,7 @@ def main():
 
     npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
     frontend_proc = subprocess.Popen(
-        [npm_cmd, "run", "dev"],
+        [npm_cmd, "run", "dev", "--", "--host"],
         cwd=str(FRONTEND_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

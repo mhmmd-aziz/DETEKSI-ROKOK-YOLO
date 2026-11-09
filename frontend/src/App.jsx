@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 
-const API_BASE = 'http://127.0.0.1:8000'
+const API_BASE = `http://${window.location.hostname || 'localhost'}:8000`
 
 /* Clean SVG Icon Components (Zero Emojis) */
 const IconShieldCheck = () => (
@@ -111,6 +111,51 @@ const IconSliders = () => (
   </svg>
 )
 
+const IconBell = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+  </svg>
+)
+
+const IconSmartphone = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+    <line x1="12" y1="18" x2="12.01" y2="18" />
+  </svg>
+)
+
+const IconDownload = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+)
+
+function playAlertTone() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext
+    if (!AudioCtx) return
+    const ctx = new AudioCtx()
+    const now = ctx.currentTime
+    ;[880, 1174.66].forEach((freq, idx) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, now + idx * 0.14)
+      gain.gain.setValueAtTime(0.16, now + idx * 0.14)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.13)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now + idx * 0.14)
+      osc.stop(now + idx * 0.14 + 0.13)
+    })
+  } catch (e) {
+    // ignore audio autoplay restriction
+  }
+}
+
 function SvgLineChart({ data, yKey, color = '#059669', unit = '%', minY = 0, maxY = 100, label = '' }) {
   if (!data || data.length === 0) return null
   const width = 520
@@ -209,7 +254,125 @@ export default function App() {
   const [metrics, setMetrics] = useState(null)
   const [selectedIncident, setSelectedIncident] = useState(null)
   const [streamKey, setStreamKey] = useState(Date.now())
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  )
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null)
+  const [swReady, setSwReady] = useState(false)
+  const [notifToast, setNotifToast] = useState('')
   const fileInputRef = useRef(null)
+  const lastNotifiedIncidentIdRef = useRef(null)
+
+  const dispatchSwNotification = async (payload) => {
+    playAlertTone()
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      return
+    }
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.ready
+        if (reg && reg.active) {
+          reg.active.postMessage({
+            type: 'SHOW_INCIDENT_NOTIFICATION',
+            payload,
+          })
+          return
+        }
+        if (reg && reg.showNotification) {
+          await reg.showNotification(payload.title || 'PELANGGARAN KTR TERKONFIRMASI', {
+            body: payload.body,
+            icon: '/icon.svg',
+            badge: '/icon.svg',
+            image: payload.image || undefined,
+            vibrate: [250, 120, 250, 120, 400],
+            tag: payload.tag || 'smokeguard-incident',
+            renotify: true,
+          })
+          return
+        }
+      }
+      new Notification(payload.title || 'PELANGGARAN KTR TERKONFIRMASI', {
+        body: payload.body,
+        icon: '/icon.svg',
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const handleEnableNotifications = async () => {
+    if (typeof Notification === 'undefined') {
+      setNotifToast('Browser ini tidak mendukung Web Notification API.')
+      return
+    }
+    try {
+      const perm = await Notification.requestPermission()
+      setNotifPermission(perm)
+      if (perm === 'granted') {
+        const deviceToken = `pwa-usb-${navigator.userAgent.slice(0, 32).replace(/\s+/g, '_')}-${Date.now()}`
+        await fetch(`${API_BASE}/api/notifications/register/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: deviceToken,
+            device_label: /Android/i.test(navigator.userAgent)
+              ? 'Android PWA (USB Debugging)'
+              : 'Desktop Browser PWA',
+          }),
+        }).catch(() => {})
+
+        await dispatchSwNotification({
+          title: 'Notifikasi SmokeGuard AI Aktif',
+          body: 'Perangkat siap menerima peringatan otomatis saat rokok terkonfirmasi.',
+          tag: 'smokeguard-welcome',
+        })
+        setNotifToast('Notifikasi PWA berhasil diaktifkan pada perangkat ini.')
+        setTimeout(() => setNotifToast(''), 4000)
+      } else {
+        setNotifToast('Izin notifikasi ditolak di pengaturan browser.')
+        setTimeout(() => setNotifToast(''), 4000)
+      }
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleTestNotification = async () => {
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      await handleEnableNotifications()
+      return
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/notifications/test/`, {
+        method: 'POST',
+      })
+      const data = res.ok ? await res.json() : {}
+      const latestSnap = incidents[0]?.snapshot_url
+        ? `${API_BASE}${incidents[0].snapshot_url}`
+        : undefined
+      await dispatchSwNotification({
+        title: data.title || 'UJI NOTIFIKASI SMOKEGUARD AI',
+        body:
+          data.body ||
+          `Simulasi Peringatan KTR: Terdeteksi aktivitas merokok pada ${status.camera_name} (${status.location}).`,
+        image: latestSnap,
+        tag: `smokeguard-test-${Date.now()}`,
+      })
+      setNotifToast('Notifikasi uji coba berhasil dikirim ke sistem / HP.')
+      setTimeout(() => setNotifToast(''), 3500)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleInstallPwa = async () => {
+    if (!deferredInstallPrompt) return
+    deferredInstallPrompt.prompt()
+    const { outcome } = await deferredInstallPrompt.userChoice
+    if (outcome === 'accepted') {
+      setDeferredInstallPrompt(null)
+    }
+  }
 
   const fetchStatus = async () => {
     try {
@@ -233,6 +396,26 @@ export default function App() {
           device_name: data.device_name,
           total_incidents: data.total_incidents,
         }))
+
+        if (data.latest_incident && data.latest_incident.id) {
+          if (lastNotifiedIncidentIdRef.current === null) {
+            lastNotifiedIncidentIdRef.current = data.latest_incident.id
+          } else if (data.latest_incident.id > lastNotifiedIncidentIdRef.current) {
+            lastNotifiedIncidentIdRef.current = data.latest_incident.id
+            const inc = data.latest_incident
+            dispatchSwNotification({
+              title: `PELANGGARAN KTR • ${inc.camera_name}`,
+              body: `Terdeteksi ${inc.cigarette_count} titik rokok (${inc.person_count} orang) di ${inc.location} • Conf ${Math.round(
+                (inc.max_confidence || 0) * 100
+              )}%`,
+              image: inc.snapshot_url ? `${API_BASE}${inc.snapshot_url}` : undefined,
+              tag: `smokeguard-inc-${inc.id}`,
+            })
+            fetchIncidents()
+          }
+        } else if (lastNotifiedIncidentIdRef.current === null) {
+          lastNotifiedIncidentIdRef.current = 0
+        }
       }
     } catch (err) {
       // ignore transient network errors
@@ -264,6 +447,28 @@ export default function App() {
   }
 
   useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then(() => {
+          setSwReady(true)
+        })
+        .catch(() => {})
+
+      const handleSwMessage = (event) => {
+        if (event.data && event.data.type === 'NOTIFICATION_CLICK_OPEN_INCIDENTS') {
+          handleSwitchMainTab('incidents')
+        }
+      }
+      navigator.serviceWorker.addEventListener('message', handleSwMessage)
+    }
+
+    const handleBeforeInstall = (e) => {
+      e.preventDefault()
+      setDeferredInstallPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
+
     fetch(`${API_BASE}/api/config/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -286,6 +491,7 @@ export default function App() {
     return () => {
       clearInterval(statusTimer)
       clearInterval(incidentTimer)
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
     }
   }, [])
 
@@ -505,6 +711,35 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
+            {deferredInstallPrompt && (
+              <button className="btn btn-primary" onClick={handleInstallPwa}>
+                <IconDownload />
+                <span>Install Aplikasi PWA</span>
+              </button>
+            )}
+
+            <button
+              className={`btn ${notifPermission === 'granted' ? 'btn-primary' : ''}`}
+              onClick={handleEnableNotifications}
+              title="Aktifkan Notifikasi Push PWA pada Perangkat Ini"
+            >
+              <IconBell />
+              <span>
+                {notifPermission === 'granted'
+                  ? 'Notifikasi PWA Aktif'
+                  : 'Aktifkan Notifikasi PWA'}
+              </span>
+            </button>
+
+            <button
+              className="btn"
+              onClick={handleTestNotification}
+              title="Kirim Simulasi Notifikasi Peringatan Merokok"
+            >
+              <IconSmartphone />
+              <span>Uji Notifikasi</span>
+            </button>
+
             <div className={`status-pill ${isAlert ? 'danger' : ''}`}>
               <span className={`pulse-dot ${isAlert ? 'danger' : ''}`} />
               {isAlert
@@ -517,6 +752,41 @@ export default function App() {
         </header>
 
         <main className="content-container">
+          {/* PWA + USB Notification Status Bar */}
+          <div className="pwa-banner">
+            <div className="pwa-banner-left">
+              <div className="pwa-badge-icon">
+                <IconSmartphone />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#065f46' }}>
+                  Mode PWA & Push Notification (USB Debugging / Localhost Ready)
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#476658', marginTop: '2px' }}>
+                  {notifToast
+                    ? notifToast
+                    : notifPermission === 'granted'
+                    ? `Service Worker ${swReady ? 'Aktif' : 'Siap'} • Notifikasi otomatis dikirim ke HP/Desktop saat rokok terkonfirmasi >= ${minConsecutiveFrames} frame berturut-turut.`
+                    : 'Klik tombol "Aktifkan Notifikasi PWA" di kanan atas agar HP (via USB Debugging localhost:5173) atau Laptop menerima alarm & foto bukti otomatis.'}
+                </div>
+              </div>
+            </div>
+            <div className="pwa-banner-actions">
+              <span
+                style={{
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '5px 10px',
+                  borderRadius: '99px',
+                  background: notifPermission === 'granted' ? '#d1fae5' : '#fef3c7',
+                  color: notifPermission === 'granted' ? '#065f46' : '#92400e',
+                  border: notifPermission === 'granted' ? '1px solid #a7f3d0' : '1px solid #fde68a',
+                }}
+              >
+                {notifPermission === 'granted' ? 'Izin Notifikasi: Diizinkan' : 'Izin Notifikasi: Belum Aktif'}
+              </span>
+            </div>
+          </div>
           {/* KPI Summary Row */}
           <section className="kpi-grid">
             <div className={`kpi-card ${isAlert ? 'alert-card' : ''}`}>

@@ -9,5 +9,6 @@ urlpatterns = [
     path("capture/", views.manual_capture, name="manual_capture"),
     path("upload/", views.upload_video, name="upload_video"),
     path("model-metrics/", views.get_model_metrics, name="get_model_metrics"),
+    path("notifications/register/", views.register_notification_device, name="register_notification_device"),
+    path("notifications/test/", views.test_notification, name="test_notification"),
 ]
-

@@ -1,0 +1,19 @@
+{
+  "name": "SmokeGuard AI — Monitoring Kawasan Tanpa Rokok",
+  "short_name": "SmokeGuard AI",
+  "description": "Sistem Monitoring Deteksi Rokok Real-Time YOLOv8 Two-Stage dengan Notifikasi PWA & FCM",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f9f6",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

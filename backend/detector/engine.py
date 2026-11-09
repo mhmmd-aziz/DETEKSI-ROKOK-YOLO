@@ -86,6 +86,8 @@ class DetectionEngine:
         self.last_raw_frame = None
         self.last_jpeg = None
         self.last_config_signature = None
+        self.test_alert_seq = 0
+        self.last_test_alert_payload = None
 
         os.makedirs(Path(settings.MEDIA_ROOT) / "snapshots", exist_ok=True)
         os.makedirs(Path(settings.MEDIA_ROOT) / "uploads", exist_ok=True)
@@ -335,7 +337,6 @@ class DetectionEngine:
             while (
                 self.stream_active
                 and self.active_stream_id == my_stream_id
-                and (source != 0 or self.viewer_count > 0)
             ):
                 cfg_sig = (
                     round(self.conf_threshold, 3),

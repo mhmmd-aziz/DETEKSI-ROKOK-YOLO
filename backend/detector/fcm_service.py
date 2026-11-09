@@ -73,7 +73,9 @@ def dispatch_fcm_background(incident_dict):
                 android=messaging.AndroidConfig(
                     priority="high",
                     notification=messaging.AndroidNotification(
-                        channel_id="smokeguard_high_importance",
+                        channel_id="smokeguard_kritikal_v2",
+                        icon="ic_stat_smokeguard",
+                        color="#059669",
                         priority="max",
                         default_sound=True,
                         default_vibrate_timings=True,

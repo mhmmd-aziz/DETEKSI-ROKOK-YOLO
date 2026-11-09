@@ -68,6 +68,8 @@ def get_status(request):
     data["latest_incident"] = latest.to_dict() if latest else None
     data["registered_devices"] = DeviceToken.objects.filter(is_active=True).count()
     data["server_ips"] = _get_laptop_ips()
+    data["test_alert_seq"] = getattr(engine, "test_alert_seq", 0)
+    data["test_alert_payload"] = getattr(engine, "last_test_alert_payload", None)
     return JsonResponse(data)
 
 
@@ -194,8 +196,10 @@ def test_notification(request):
         "detection_mode": "Two-Stage YOLOv8",
         "snapshot_url": "",
     }
+    engine.test_alert_seq = getattr(engine, "test_alert_seq", 0) + 1
+    engine.last_test_alert_payload = payload
     dispatch_fcm_background(payload)
-    return JsonResponse({"ok": True, "payload": payload})
+    return JsonResponse({"ok": True, "payload": payload, "test_alert_seq": engine.test_alert_seq})
 
 
 @csrf_exempt

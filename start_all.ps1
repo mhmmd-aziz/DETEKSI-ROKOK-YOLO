@@ -1,7 +1,7 @@
 param(
     [string]$CustomIp = "",
     [switch]$BuildApk = $false,
-    [switch]$InstallApk = $false
+    [switch]$SkipInstall = $false
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -11,11 +11,6 @@ Set-Location $ProjectRoot
 $PythonExe = "d:\ml\miniconda3\envs\mlenv\python.exe"
 if (-not (Test-Path $PythonExe)) {
     $PythonExe = "python"
-}
-
-$FlutterBat = "D:\mobile_app\flutter\bin\flutter.bat"
-if (-not (Test-Path $FlutterBat)) {
-    $FlutterBat = "flutter"
 }
 
 $AdbExe = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
@@ -67,34 +62,41 @@ if ((Test-Path $DartFile) -and ($ActiveIp -ne "127.0.0.1")) {
 # 3. Buka Port 8000 di Windows Firewall (jika dijalankan sebagai Admin) agar Hotspot HP / Wi-Fi tidak terblokir
 netsh advfirewall firewall add rule name="SmokeGuard_Django_8000" dir=in action=allow protocol=TCP localport=8000 | Out-Null
 
-# 4. Aktifkan USB Port Forwarding (adb reverse) jika HP dicolok kabel USB
-& $AdbExe reverse tcp:8000 tcp:8000 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  [USB ADB] Port Forwarding aktif (tcp:8000 -> tcp:8000)" -ForegroundColor Green
-}
-
-# 5. Opsional: Build ulang APK jika diminta (-BuildApk)
+# 4. Build ulang APK jika diminta (-BuildApk) atau jika file APK belum ada
 $ApkPath = Join-Path $ProjectRoot "mobile_app\build\app\outputs\flutter-apk\app-debug.apk"
-if ($BuildApk) {
+if ($BuildApk -or (-not (Test-Path $ApkPath))) {
     Write-Host "`n  [FLUTTER] Mem-build APK dengan IP terbaru ($ActiveIp)..." -ForegroundColor Yellow
     $GradlewBat = Join-Path $ProjectRoot "mobile_app\android\gradlew.bat"
     $AndroidDir = Join-Path $ProjectRoot "mobile_app\android"
     & $GradlewBat -p $AndroidDir assembleDebug
 }
 
-# 6. Opsional: Install APK ke HP via USB jika diminta (-InstallApk atau -BuildApk)
-if ($InstallApk -or $BuildApk) {
-    if (Test-Path $ApkPath) {
-        Write-Host "  [ADB INSTALL] Meng-install APK ke HP (Silakan tekan 'Install' di layar HP jika muncul pop-up)..." -ForegroundColor Yellow
+# 5. Aktifkan USB Port Forwarding & OTOMATIS INSTALL + BUKA APK DI HP VIA USB
+& $AdbExe reverse tcp:8000 tcp:8000 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  [USB ADB] Port Forwarding aktif (tcp:8000 -> tcp:8000)" -ForegroundColor Green
+    if ((-not $SkipInstall) -and (Test-Path $ApkPath)) {
+        Write-Host "  [USB INSTALL] Meng-install SmokeGuard AI APK ke HP Anda via USB..." -ForegroundColor Yellow
+        Write-Host "  >>> PERHATIKAN LAYAR HP ANDA: Tekan 'Install' / 'Tetap Instal' jika muncul pop-up! <<<" -ForegroundColor Magenta
+        # Nyalakan layar HP agar pop-up terlihat
+        & $AdbExe shell input keyevent KEYCODE_WAKEUP 2>&1 | Out-Null
         & $AdbExe install -r $ApkPath
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  [USB INSTALL] APK berhasil ter-install! Membuka aplikasi di HP..." -ForegroundColor Green
+            & $AdbExe shell am start -n "id.smokeguard.smokeguard_mobile/.MainActivity" 2>&1 | Out-Null
+        } else {
+            Write-Host "  [INFO USB] Jika muncul INSTALL_FAILED_USER_RESTRICTED, aktifkan 'Install via USB' di Opsi Pengembang HP atau tekan 'Install' pada pop-up layar HP." -ForegroundColor Red
+        }
     }
+} else {
+    Write-Host "  [USB ADB] HP belum terdeteksi via USB (Mode Wi-Fi / Hotspot siap digunakan)" -ForegroundColor Yellow
 }
 
-# 7. Bersihkan proses lama di port 8000 & 5173 lalu jalankan Backend Django + React Web
+# 6. Bersihkan proses lama di port 8000 & 5173 lalu jalankan Backend Django + React Web
 Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
     Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "=================================================================`n" -ForegroundColor Green
-& $PythonExe (Join-Path $ProjectRoot "run_all.py")
+& $PythonExe (Join-Path $ProjectRoot "run_all.py") --skip-adb-install
 

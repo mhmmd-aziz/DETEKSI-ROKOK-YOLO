@@ -90,6 +90,9 @@ def setup_adb_reverse():
         r"D:\mobile_app\Android\Sdk\platform-tools\adb.exe",
         r"C:\Android\sdk\platform-tools\adb.exe",
     ]
+    apk_path = ROOT_DIR / "mobile_app" / "build" / "app" / "outputs" / "flutter-apk" / "app-debug.apk"
+    skip_install = "--skip-adb-install" in sys.argv
+
     for adb_bin in adb_candidates:
         try:
             res = subprocess.run(
@@ -100,6 +103,20 @@ def setup_adb_reverse():
             )
             if res.returncode == 0:
                 print("  [USB ADB] Port Forwarding otomatis aktif: tcp:8000 -> tcp:8000 (Flutter USB Ready)")
+                if not skip_install and apk_path.exists():
+                    print("  [USB INSTALL] Meng-install APK ke HP via USB (Tekan 'Install' di layar HP jika muncul pop-up)...", flush=True)
+                    subprocess.run([adb_bin, "shell", "input", "keyevent", "KEYCODE_WAKEUP"], capture_output=True, timeout=3)
+                    inst = subprocess.run([adb_bin, "install", "-r", str(apk_path)], capture_output=True, text=True, timeout=45)
+                    if inst.returncode == 0:
+                        print("  [USB INSTALL] APK Berhasil Ter-install! Membuka aplikasi di HP...", flush=True)
+                        subprocess.run(
+                            [adb_bin, "shell", "am", "start", "-n", "id.smokeguard.smokeguard_mobile/.MainActivity"],
+                            capture_output=True,
+                            timeout=5,
+                        )
+                    else:
+                        err_msg = (inst.stderr or inst.stdout or "").strip()
+                        print(f"  [USB INSTALL] Status: {err_msg}", flush=True)
                 return True
         except Exception:
             continue

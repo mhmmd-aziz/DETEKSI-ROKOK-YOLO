@@ -195,7 +195,7 @@ export default function App() {
     camera_name: 'CAM 01 - CCTV Indoor (Demo)',
     location: 'Gedung Utama Lt. 1 (Kawasan Tanpa Rokok)',
     current_frame: 0,
-    total_frames: 240,
+    total_frames: 190,
     person_count: 5,
     smoker_count: 0,
     cigarette_count: 0,

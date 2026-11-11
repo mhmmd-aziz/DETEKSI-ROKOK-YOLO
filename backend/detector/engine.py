@@ -75,7 +75,7 @@ class DetectionEngine:
 
         # Live telemetry state
         self.current_frame_idx = 0
-        self.total_frames = 240
+        self.total_frames = 190
         self.person_count = 0
         self.smoker_count = 0
         self.cigarette_count = 0

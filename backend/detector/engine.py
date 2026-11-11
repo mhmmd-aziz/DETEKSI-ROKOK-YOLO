@@ -39,10 +39,11 @@ class DetectionEngine:
         self.person_model = YOLO(self.person_model_path)
         self.smoke_model = YOLO(self.smoke_model_path)
 
-        default_video = Path("D:/semester 5/PRAK PCD/Young_men_smoking_indoors_27ce285e.mp4")
+        default_video = Path(settings.MEDIA_ROOT) / "demo" / "test3.mp4"
         if not default_video.exists():
-            alt_video = project_root / "runs" / "detect" / "predict_two_stage" / "Young_men_smoking_indoors_two_stage.mp4"
-            default_video = alt_video
+            default_video = Path("D:/semester 5/PRAK PCD/Young_men_smoking_indoors_27ce285e.mp4")
+        if not default_video.exists():
+            default_video = project_root / "runs" / "detect" / "predict_two_stage" / "Young_men_smoking_indoors_two_stage.mp4"
 
         self.default_video_path = str(default_video)
         self.custom_video_path = None

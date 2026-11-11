@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -12,7 +12,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String kDefaultLanServerUrl = 'http://192.168.1.138:8000';
+const String kDefaultLanServerUrl = 'http://192.168.56.1:8000';
 const MethodChannel _bgServiceChannel = MethodChannel('id.smokeguard/bg_service');
 
 /// Permintaan pindah tab dari luar widget (mis. notifikasi diketuk). 1 = Bukti Insiden.

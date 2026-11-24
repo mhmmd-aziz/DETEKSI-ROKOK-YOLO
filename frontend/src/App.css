@@ -178,6 +178,11 @@ body {
   box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.25);
 }
 
+.pulse-dot.warn {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.24);
+}
+
 .sidebar-footer-sub {
   font-size: 0.73rem;
   color: var(--text-secondary);
@@ -333,8 +338,8 @@ body {
 /* Main Dashboard Grid */
 .monitor-grid {
   display: grid;
-  grid-template-columns: 1fr 370px;
-  gap: 22px;
+  grid-template-columns: 1fr 345px;
+  gap: 20px;
   align-items: start;
 }
 
@@ -804,11 +809,161 @@ input:checked + .slider:before {
   display: block;
 }
 
+/* Dual CCTV Split View */
+.dual-cctv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+  background: #f8fbf9;
+}
+
+.cctv-unit-card {
+  background: #ffffff;
+  border: 1.5px solid var(--border-light);
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cctv-unit-card.is-verifying {
+  border-color: #fbbf24;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.1);
+}
+
+.cctv-unit-card.is-alert {
+  border-color: var(--danger-500);
+  box-shadow: 0 8px 22px rgba(239, 68, 68, 0.16);
+}
+
+.cctv-unit-header {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #ffffff;
+}
+
+.cctv-unit-title {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.cctv-unit-sub {
+  font-size: 0.71rem;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.cctv-unit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-compact {
+  padding: 6px 10px;
+  font-size: 0.74rem;
+  border-radius: 8px;
+  gap: 5px;
+}
+
+.cam-status-chip {
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 0.71rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+.cam-status-chip.safe {
+  background: rgba(5, 150, 105, 0.88);
+}
+
+.cam-status-chip.warn {
+  background: rgba(217, 119, 6, 0.92);
+}
+
+.cam-status-chip.danger {
+  background: rgba(220, 38, 38, 0.94);
+}
+
+.cctv-unit-footer {
+  padding: 10px 14px 12px;
+  background: #0d1f17;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cctv-stat-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.cctv-stat-pill {
+  font-size: 0.72rem;
+  color: #cde3d8;
+  font-weight: 600;
+}
+
+.cctv-stat-pill strong {
+  color: #ffffff;
+}
+
+.cctv-stat-pill.danger strong {
+  color: #fca5a5;
+}
+
+.cctv-verify-track {
+  width: 100%;
+  height: 5px;
+  background: #1a382b;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.cctv-verify-fill {
+  height: 100%;
+  background: var(--emerald-500);
+  transition: width 0.2s ease;
+}
+
+.cctv-verify-fill.warn {
+  background: #f59e0b;
+}
+
+.cctv-verify-fill.danger {
+  background: var(--danger-500);
+}
+
+@media (max-width: 1360px) {
+  .monitor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1150px) {
   .kpi-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .monitor-grid, .metrics-two-col, .pipeline-steps {
+  .metrics-two-col, .pipeline-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .dual-cctv-grid {
     grid-template-columns: 1fr;
   }
 }

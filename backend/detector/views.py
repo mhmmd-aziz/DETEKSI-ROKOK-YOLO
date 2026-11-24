@@ -41,8 +41,9 @@ def _get_laptop_ips():
 def stream_video(request):
     engine = DetectionEngine()
     requested_source = request.GET.get("source")
+    cam_key = request.GET.get("cam")
     response = StreamingHttpResponse(
-        engine.generate_mjpeg(requested_source=requested_source),
+        engine.generate_mjpeg(requested_source=requested_source, cam_key=cam_key),
         content_type="multipart/x-mixed-replace; boundary=frame",
     )
     response["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -51,17 +52,19 @@ def stream_video(request):
 
 def get_latest_frame(request):
     engine = DetectionEngine()
-    engine._ensure_producer_running()
-    if engine.last_jpeg is None:
+    cam_key = request.GET.get("cam")
+    ch = engine.ensure_channel_for_request(cam_key)
+    if ch.last_jpeg is None:
         return HttpResponse(status=204)
-    response = HttpResponse(engine.last_jpeg, content_type="image/jpeg")
+    response = HttpResponse(ch.last_jpeg, content_type="image/jpeg")
     response["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
 
 def get_status(request):
     engine = DetectionEngine()
-    data = engine.get_status_dict()
+    cam_key = request.GET.get("cam")
+    data = engine.get_status_dict(cam_key=cam_key)
     total_incidents = SmokingIncident.objects.count()
     latest = SmokingIncident.objects.first()
     data["total_incidents"] = total_incidents
@@ -96,7 +99,7 @@ def update_config(request):
         engine.conf_threshold = max(0.15, min(0.90, float(body["conf_threshold"])))
     if "min_consecutive_frames" in body:
         engine.min_consecutive_frames = max(3, min(40, int(body["min_consecutive_frames"])))
-    if "source_mode" in body and body["source_mode"] in ["cctv_demo", "webcam", "custom_video"]:
+    if "source_mode" in body and body["source_mode"] in DetectionEngine.VALID_MODES:
         engine.set_source_mode(body["source_mode"])
     if "paused" in body:
         engine.paused = bool(body["paused"])
@@ -119,8 +122,14 @@ def incidents_view(request):
         SmokingIncident.objects.all().delete()
         return JsonResponse({"ok": True, "incidents": []})
 
-    limit = int(request.GET.get("limit", 24))
-    items = [inc.to_dict() for inc in SmokingIncident.objects.all()[:limit]]
+    limit = int(request.GET.get("limit", 36))
+    cam_filter = request.GET.get("cam", "").strip()
+    qs = SmokingIncident.objects.all()
+    if cam_filter == "cctv_a":
+        qs = qs.filter(camera_name__icontains="CCTV A")
+    elif cam_filter == "cctv_b":
+        qs = qs.filter(camera_name__icontains="CCTV B")
+    items = [inc.to_dict() for inc in qs[:limit]]
     return JsonResponse({"incidents": items, "total": SmokingIncident.objects.count()})
 
 
@@ -130,13 +139,22 @@ def manual_capture(request):
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
     engine = DetectionEngine()
-    if engine.last_jpeg is None:
+    cam_key = request.GET.get("cam")
+    if not cam_key and request.body:
+        try:
+            body = json.loads(request.body.decode("utf-8"))
+            cam_key = body.get("cam")
+        except Exception:
+            pass
+
+    ch = engine.get_channel(cam_key)
+    if ch.last_jpeg is None:
         return JsonResponse({"error": "Stream belum aktif"}, status=400)
 
-    arr = np.frombuffer(engine.last_jpeg, dtype=np.uint8)
+    arr = np.frombuffer(ch.last_jpeg, dtype=np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if frame is not None:
-        engine._save_incident_snapshot(frame, engine.current_frame_idx)
+        engine._save_incident_snapshot(ch, frame, ch.current_frame_idx)
 
     latest = SmokingIncident.objects.first()
     return JsonResponse({"ok": True, "incident": latest.to_dict() if latest else None})
@@ -156,8 +174,8 @@ def register_notification_device(request):
     if not token:
         return JsonResponse({"error": "Token wajib diisi"}, status=400)
 
-    device_label = body.get("device_label", "Perangkat Pengawas PWA")
-    platform = body.get("platform", "PWA Localhost / USB")
+    device_label = body.get("device_label", "Perangkat Pengawas Mobile")
+    platform = body.get("platform", "Flutter Android Native")
 
     obj, _ = DeviceToken.objects.update_or_create(
         token=token,
@@ -182,17 +200,18 @@ def test_notification(request):
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
     engine = DetectionEngine()
+    ch = engine.primary_channel()
     latest = SmokingIncident.objects.first()
     payload = latest.to_dict() if latest else {
         "id": 0,
-        "camera_name": engine.camera_name,
-        "location": engine.location,
+        "camera_name": ch.camera_name,
+        "location": ch.location,
         "timestamp": "Simulasi Uji Notifikasi",
-        "frame_number": engine.current_frame_idx,
-        "person_count": max(1, engine.person_count),
+        "frame_number": ch.current_frame_idx,
+        "person_count": max(1, ch.person_count),
         "smoker_count": 1,
-        "cigarette_count": max(1, engine.cigarette_count),
-        "max_confidence": max(0.85, engine.max_confidence),
+        "cigarette_count": max(1, ch.cigarette_count),
+        "max_confidence": max(0.85, ch.max_confidence),
         "detection_mode": "Two-Stage YOLOv8",
         "snapshot_url": "",
     }
@@ -219,7 +238,11 @@ def upload_video(request):
     engine = DetectionEngine()
     engine.custom_video_path = str(save_path)
     engine.custom_video_name = video_file.name[:24]
+    engine.channels["custom_video"].source = str(save_path)
+    engine.channels["custom_video"].camera_name = f"CCTV Upload - {engine.custom_video_name}"
+    engine._stop_channel(engine.channels["custom_video"])
     engine.set_source_mode("custom_video")
+    engine._ensure_channel_running(engine.channels["custom_video"])
 
     return JsonResponse({"ok": True, "config": engine.get_status_dict()})
 

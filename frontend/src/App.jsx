@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 
 // Gunakan relative path ('') agar semua request /api dan /media otomatis lewat proxy port 5173 (Vite).
-// Dengan begitu, HP Android (via USB Debugging / Wi-Fi) cukup terhubung ke port 5173 saja!
 const API_BASE = ''
 
 /* Clean SVG Icon Components (Zero Emojis) */
@@ -17,6 +16,24 @@ const IconMonitor = () => (
     <rect x="2" y="3" width="20" height="14" rx="2" />
     <line x1="8" y1="21" x2="16" y2="21" />
     <line x1="12" y1="17" x2="12" y2="21" />
+  </svg>
+)
+
+const IconGrid = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1" />
+    <rect x="14" y="3" width="7" height="7" rx="1" />
+    <rect x="14" y="14" width="7" height="7" rx="1" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+  </svg>
+)
+
+const IconMaximize = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 3 21 3 21 9" />
+    <polyline points="9 21 3 21 3 15" />
+    <line x1="21" y1="3" x2="14" y2="10" />
+    <line x1="3" y1="21" x2="10" y2="14" />
   </svg>
 )
 
@@ -182,30 +199,70 @@ function SvgLineChart({ data, yKey, color = '#059669', unit = '%', minY = 0, max
   )
 }
 
+const DEFAULT_CAM_A = {
+  key: 'cctv_a',
+  camera_name: 'CCTV A - Koridor Indoor',
+  location: 'Gedung Utama Lt. 1 (Indoor KTR)',
+  current_frame: 0,
+  total_frames: 190,
+  resolution: '1920x1080',
+  person_count: 0,
+  smoker_count: 0,
+  cigarette_count: 0,
+  consecutive_hits: 0,
+  max_confidence: 0,
+  fps: 0,
+  inference_ms: 0,
+  status: 'AMAN',
+}
+
+const DEFAULT_CAM_B = {
+  key: 'cctv_b',
+  camera_name: 'CCTV B - Selasar & Parkiran',
+  location: 'Selasar & Area Parkir Kampus (Outdoor KTR)',
+  current_frame: 0,
+  total_frames: 192,
+  resolution: '1280x720',
+  person_count: 0,
+  smoker_count: 0,
+  cigarette_count: 0,
+  consecutive_hits: 0,
+  max_confidence: 0,
+  fps: 0,
+  inference_ms: 0,
+  status: 'AMAN',
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('monitor') // 'monitor' | 'incidents' | 'metrics'
-  const [sourceMode, setSourceMode] = useState('cctv_demo') // 'cctv_demo' | 'custom_video' | 'webcam'
+  const [sourceMode, setSourceMode] = useState('dual_cctv') // 'dual_cctv' | 'cctv_a' | 'cctv_b' | 'custom_video' | 'webcam'
   const [confThreshold, setConfThreshold] = useState(0.45)
   const [minConsecutiveFrames, setMinConsecutiveFrames] = useState(12)
   const [twoStage, setTwoStage] = useState(true)
   const [showPersonBox, setShowPersonBox] = useState(true)
   const [paused, setPaused] = useState(false)
+  const [incidentFilter, setIncidentFilter] = useState('all') // 'all' | 'cctv_a' | 'cctv_b'
 
   const [status, setStatus] = useState({
-    camera_name: 'CAM 01 - CCTV Indoor (Demo)',
-    location: 'Gedung Utama Lt. 1 (Kawasan Tanpa Rokok)',
+    camera_name: 'Dual Monitor (CCTV A & CCTV B)',
+    location: 'Koridor Indoor & Selasar Parkiran Kampus',
+    active_cameras: 2,
     current_frame: 0,
     total_frames: 190,
-    person_count: 5,
+    person_count: 0,
     smoker_count: 0,
     cigarette_count: 0,
     consecutive_hits: 0,
     max_confidence: 0.0,
-    fps: 28.5,
-    inference_ms: 34.2,
+    fps: 24.0,
+    inference_ms: 28.0,
     status: 'AMAN',
     device_name: 'NVIDIA GeForce RTX 3050 Laptop GPU',
     total_incidents: 0,
+    cameras: {
+      cctv_a: DEFAULT_CAM_A,
+      cctv_b: DEFAULT_CAM_B,
+    },
   })
   const [incidents, setIncidents] = useState([])
   const [metrics, setMetrics] = useState(null)
@@ -221,7 +278,9 @@ export default function App() {
         const data = await res.json()
         if (!hasSyncedConfigRef.current) {
           hasSyncedConfigRef.current = true
-          if (data.source_mode) setSourceMode(data.source_mode)
+          if (data.source_mode) {
+            setSourceMode(data.source_mode === 'cctv_demo' ? 'cctv_a' : data.source_mode)
+          }
           if (typeof data.conf_threshold === 'number') setConfThreshold(data.conf_threshold)
           if (typeof data.min_consecutive_frames === 'number') setMinConsecutiveFrames(data.min_consecutive_frames)
           if (typeof data.two_stage === 'boolean') setTwoStage(data.two_stage)
@@ -232,6 +291,7 @@ export default function App() {
           ...prev,
           camera_name: data.camera_name,
           location: data.location,
+          active_cameras: data.active_cameras ?? prev.active_cameras,
           current_frame: data.current_frame,
           total_frames: data.total_frames,
           person_count: data.person_count,
@@ -244,6 +304,12 @@ export default function App() {
           status: data.status,
           device_name: data.device_name,
           total_incidents: data.total_incidents,
+          cameras: {
+            cctv_a: data.cameras?.cctv_a || prev.cameras.cctv_a,
+            cctv_b: data.cameras?.cctv_b || prev.cameras.cctv_b,
+            custom_video: data.cameras?.custom_video,
+            webcam: data.cameras?.webcam,
+          },
         }))
       }
     } catch (err) {
@@ -253,7 +319,7 @@ export default function App() {
 
   const fetchIncidents = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/incidents/?limit=30`)
+      const res = await fetch(`${API_BASE}/api/incidents/?limit=36`)
       if (res.ok) {
         const data = await res.json()
         setIncidents(data.incidents || [])
@@ -397,9 +463,13 @@ export default function App() {
     }
   }
 
-  const handleManualCapture = async () => {
+  const handleManualCapture = async (camKey = null) => {
     try {
-      const res = await fetch(`${API_BASE}/api/capture/`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/capture/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(camKey ? { cam: camKey } : {}),
+      })
       if (res.ok) {
         fetchIncidents()
         fetchStatus()
@@ -446,6 +516,103 @@ export default function App() {
   const isVerifying = status.status === 'VERIFIKASI'
   const verifyPct = Math.min(100, Math.round((status.consecutive_hits / Math.max(1, minConsecutiveFrames)) * 100))
 
+  const camA = status.cameras?.cctv_a || DEFAULT_CAM_A
+  const camB = status.cameras?.cctv_b || DEFAULT_CAM_B
+
+  const filteredIncidents = incidents.filter((item) => {
+    if (incidentFilter === 'cctv_a') return (item.camera_name || '').includes('CCTV A')
+    if (incidentFilter === 'cctv_b') return (item.camera_name || '').includes('CCTV B')
+    return true
+  })
+
+  const renderSingleCctvCard = (camObj, camKey, shortLabel) => {
+    const cAlert = camObj.status === 'PELANGGARAN MEROKOK'
+    const cVerify = camObj.status === 'VERIFIKASI'
+    const cPct = Math.min(100, Math.round(((camObj.consecutive_hits || 0) / Math.max(1, minConsecutiveFrames)) * 100))
+
+    return (
+      <div className={`cctv-unit-card ${cAlert ? 'is-alert' : cVerify ? 'is-verifying' : ''}`} key={camKey}>
+        <div className="cctv-unit-header">
+          <div className="card-title-group">
+            <span className={`pulse-dot ${cAlert ? 'danger' : cVerify ? 'warn' : ''}`} />
+            <div>
+              <div className="cctv-unit-title">{camObj.camera_name}</div>
+              <div className="cctv-unit-sub">
+                {camObj.location} • Frame {camObj.current_frame} / {camObj.total_frames || 190}
+              </div>
+            </div>
+          </div>
+          <div className="cctv-unit-actions">
+            <button
+              type="button"
+              className="btn btn-compact"
+              title={`Fokus ke ${shortLabel}`}
+              onClick={() => handleSelectSource(camKey)}
+            >
+              <IconMaximize />
+              <span>Fokus</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-compact"
+              title={`Snapshot Manual ${shortLabel}`}
+              onClick={() => handleManualCapture(camKey)}
+            >
+              <IconCamera size={14} />
+              <span>Snapshot</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="video-viewport">
+          <img
+            key={`${camKey}-${streamKey}`}
+            src={`${API_BASE}/api/stream/?cam=${camKey}&t=${streamKey}`}
+            alt={camObj.camera_name}
+            className="video-stream-img"
+          />
+          <div className="video-overlay-bar">
+            <div className="cam-badge">
+              <span className={`pulse-dot ${cAlert ? 'danger' : cVerify ? 'warn' : ''}`} />
+              <span>LIVE • {shortLabel}</span>
+            </div>
+            <div className={`cam-status-chip ${cAlert ? 'danger' : cVerify ? 'warn' : 'safe'}`}>
+              {cAlert
+                ? `MEROKOK (${camObj.cigarette_count} Rokok)`
+                : cVerify
+                ? `VERIFIKASI (${camObj.consecutive_hits}/${minConsecutiveFrames})`
+                : 'ZONA AMAN'}
+            </div>
+          </div>
+        </div>
+
+        <div className="cctv-unit-footer">
+          <div className="cctv-stat-pills">
+            <span className="cctv-stat-pill">Orang: <strong>{camObj.person_count}</strong></span>
+            <span className={`cctv-stat-pill ${camObj.smoker_count > 0 ? 'danger' : ''}`}>
+              Perokok: <strong>{camObj.smoker_count}</strong>
+            </span>
+            <span className={`cctv-stat-pill ${camObj.cigarette_count > 0 ? 'danger' : ''}`}>
+              Rokok: <strong>{camObj.cigarette_count}</strong>
+            </span>
+            <span className="cctv-stat-pill">
+              Conf: <strong>{((camObj.max_confidence || 0) * 100).toFixed(0)}%</strong>
+            </span>
+            <span className="cctv-stat-pill">
+              <strong>{camObj.fps || 0} FPS</strong>
+            </span>
+          </div>
+          <div className="cctv-verify-track">
+            <div
+              className={`cctv-verify-fill ${cAlert ? 'danger' : cVerify ? 'warn' : ''}`}
+              style={{ width: `${cPct}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-layout">
       {/* Sidebar */}
@@ -456,7 +623,7 @@ export default function App() {
           </div>
           <div>
             <div className="brand-title">SmokeGuard AI</div>
-            <div className="brand-subtitle">Monitoring KTR • YOLOv8</div>
+            <div className="brand-subtitle">Multi-CCTV KTR • YOLOv8</div>
           </div>
         </div>
 
@@ -467,7 +634,7 @@ export default function App() {
             onClick={() => handleSwitchMainTab('monitor')}
           >
             <IconMonitor />
-            Live Monitoring
+            Live Monitoring (2 CCTV)
           </button>
 
           <button
@@ -494,7 +661,7 @@ export default function App() {
             <span>{status.device_name || 'GPU CUDA Active'}</span>
           </div>
           <div className="sidebar-footer-sub">
-            Backend: Django 5.2 REST Stream<br />
+            Aktif: CCTV A (Indoor) &amp; CCTV B (Outdoor)<br />
             Filter Snapshot: Min {minConsecutiveFrames} Frame Konsisten
           </div>
         </div>
@@ -505,7 +672,7 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-left">
             <h1>
-              {activeTab === 'monitor' && 'Dashboard Monitoring Kawasan Tanpa Rokok'}
+              {activeTab === 'monitor' && 'Dashboard Monitoring Kawasan Tanpa Rokok (Multi-CCTV)'}
               {activeTab === 'incidents' && 'Log Bukti Pelanggaran & Snapshot Otomatis'}
               {activeTab === 'metrics' && 'Evaluasi Performa Model YOLOv8 (Tugas Akhir)'}
             </h1>
@@ -529,8 +696,10 @@ export default function App() {
           <section className="kpi-grid">
             <div className={`kpi-card ${isAlert ? 'alert-card' : ''}`}>
               <div>
-                <div className="kpi-label">Status Kawasan</div>
-                <div className={`kpi-value ${isAlert ? 'danger' : 'emerald'}`} style={{ fontSize: '1.25rem' }}>
+                <div className="kpi-label">
+                  Status Kawasan ({sourceMode === 'dual_cctv' ? '2 CCTV Aktif' : '1 Sumber Aktif'})
+                </div>
+                <div className={`kpi-value ${isAlert ? 'danger' : 'emerald'}`} style={{ fontSize: '1.22rem' }}>
                   {isAlert
                     ? 'MEROKOK TERDETEKSI'
                     : isVerifying
@@ -552,7 +721,7 @@ export default function App() {
 
             <div className="kpi-card">
               <div>
-                <div className="kpi-label">Jumlah Orang di Kamera</div>
+                <div className="kpi-label">Total Orang Terpantau</div>
                 <div className="kpi-value">{status.person_count} Orang</div>
                 <div className="kpi-sub">
                   Terkonfirmasi Merokok: <strong>{status.smoker_count} Orang</strong>
@@ -591,7 +760,7 @@ export default function App() {
 
             <div className="kpi-card">
               <div>
-                <div className="kpi-label">Kecepatan Inferensi</div>
+                <div className="kpi-label">Kecepatan Inferensi GPU</div>
                 <div className="kpi-value emerald">{status.fps} FPS</div>
                 <div className="kpi-sub">
                   Waktu Proses: {status.inference_ms} ms / frame
@@ -608,65 +777,103 @@ export default function App() {
           {/* TAB 1: LIVE MONITOR */}
           {activeTab === 'monitor' && (
             <section className="monitor-grid">
-              {/* Left: Live Stream Card */}
+              {/* Left: Multi-CCTV or Focused Stream Card */}
               <div className="card">
                 <div className="card-header">
                   <div className="card-title-group">
                     <span className="pulse-dot" />
                     <div>
-                      <div className="card-title">Live Visual Feed — {status.camera_name}</div>
+                      <div className="card-title">
+                        {sourceMode === 'dual_cctv'
+                          ? 'Live Multi-View — CCTV A (Indoor) & CCTV B (Outdoor)'
+                          : `Live Visual Feed — ${status.camera_name}`}
+                      </div>
                       <div className="card-subtitle">
-                        {sourceMode === 'webcam'
+                        {sourceMode === 'dual_cctv'
+                          ? `2 Kamera Berjalan Serentak • ${twoStage ? 'Two-Stage YOLOv8 Aktif' : 'Single-Stage'} • Conf ${Math.round(confThreshold * 100)}%`
+                          : sourceMode === 'webcam'
                           ? 'Kamera Webcam Aktif • Real-Time Stream'
-                          : `Frame ${status.current_frame} / ${status.total_frames} • Resolusi HD 1280×720`}
+                          : `Frame ${status.current_frame} / ${status.total_frames} • ${status.location}`}
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {sourceMode !== 'dual_cctv' && (
+                      <button className="btn" onClick={() => handleSelectSource('dual_cctv')}>
+                        <IconGrid />
+                        <span>Tampilkan 2 CCTV</span>
+                      </button>
+                    )}
                     <button className="btn" onClick={handleTogglePause}>
                       {paused ? <IconPlay /> : <IconPause />}
-                      <span>{paused ? 'Lanjutkan Stream' : 'Jeda Video'}</span>
+                      <span>{paused ? 'Lanjutkan' : 'Jeda Video'}</span>
                     </button>
-                    <button className="btn btn-primary" onClick={handleManualCapture}>
-                      <IconCamera size={15} />
-                      <span>Ambil Snapshot Manual</span>
-                    </button>
+                    {sourceMode !== 'dual_cctv' && (
+                      <button className="btn btn-primary" onClick={() => handleManualCapture(sourceMode)}>
+                        <IconCamera size={15} />
+                        <span>Ambil Snapshot</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="video-viewport">
-                  <img
-                    key={`${sourceMode}-${streamKey}`}
-                    src={`${API_BASE}/api/stream/?source=${sourceMode}&t=${streamKey}`}
-                    alt="Live CCTV Stream"
-                    className="video-stream-img"
-                  />
-                  <div className="video-overlay-bar">
-                    <div className="cam-badge">
-                      <span className="pulse-dot" />
-                      <span>LIVE • {status.camera_name}</span>
-                    </div>
-                    <div className="mode-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                      <IconCheck />
-                      <span>
-                        {twoStage ? 'Two-Stage (Person ROI + Rokok)' : 'Single-Stage Standard'} • Conf {Math.round(confThreshold * 100)}%
-                      </span>
+                {/* DUAL CCTV SPLIT VIEW vs SINGLE VIEW */}
+                {sourceMode === 'dual_cctv' ? (
+                  <div className="dual-cctv-grid">
+                    {renderSingleCctvCard(camA, 'cctv_a', 'CCTV A')}
+                    {renderSingleCctvCard(camB, 'cctv_b', 'CCTV B')}
+                  </div>
+                ) : (
+                  <div className="video-viewport">
+                    <img
+                      key={`${sourceMode}-${streamKey}`}
+                      src={`${API_BASE}/api/stream/?cam=${sourceMode}&source=${sourceMode}&t=${streamKey}`}
+                      alt="Live CCTV Stream"
+                      className="video-stream-img"
+                    />
+                    <div className="video-overlay-bar">
+                      <div className="cam-badge">
+                        <span className="pulse-dot" />
+                        <span>LIVE • {status.camera_name}</span>
+                      </div>
+                      <div className="mode-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <IconCheck />
+                        <span>
+                          {twoStage ? 'Two-Stage (Person ROI + Rokok)' : 'Single-Stage Standard'} • Conf {Math.round(confThreshold * 100)}%
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Source Mode Sub-Tabs */}
                 <div className="video-toolbar">
-                  <div className="toolbar-group">
+                  <div className="toolbar-group" style={{ flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#476658' }}>
-                      Tab Sumber Input:
+                      Pilih Kamera:
                     </span>
                     <button
-                      className={`btn ${sourceMode === 'cctv_demo' ? 'btn-primary' : ''}`}
-                      onClick={() => handleSelectSource('cctv_demo')}
+                      className={`btn ${sourceMode === 'dual_cctv' ? 'btn-primary' : ''}`}
+                      onClick={() => handleSelectSource('dual_cctv')}
+                    >
+                      <IconGrid />
+                      <span>Dual CCTV (A + B)</span>
+                    </button>
+
+                    <button
+                      className={`btn ${sourceMode === 'cctv_a' ? 'btn-primary' : ''}`}
+                      onClick={() => handleSelectSource('cctv_a')}
                     >
                       <IconVideo />
-                      <span>CCTV Indoor (Video Demo)</span>
+                      <span>CCTV A (Indoor)</span>
+                    </button>
+
+                    <button
+                      className={`btn ${sourceMode === 'cctv_b' ? 'btn-primary' : ''}`}
+                      onClick={() => handleSelectSource('cctv_b')}
+                    >
+                      <IconVideo />
+                      <span>CCTV B (Selasar &amp; Parkir)</span>
                     </button>
 
                     <input
@@ -681,7 +888,7 @@ export default function App() {
                       onClick={() => fileInputRef.current?.click()}
                     >
                       <IconUpload />
-                      <span>Upload Video MP4</span>
+                      <span>Upload MP4</span>
                     </button>
 
                     <button
@@ -703,7 +910,7 @@ export default function App() {
                       <IconSliders />
                       <div>
                         <div className="card-title">Pengaturan Deteksi AI</div>
-                        <div className="card-subtitle">Kontrol Real-Time Pipeline YOLOv8</div>
+                        <div className="card-subtitle">Berlaku serentak pada CCTV A &amp; CCTV B</div>
                       </div>
                     </div>
                   </div>
@@ -711,7 +918,7 @@ export default function App() {
                     <div className="control-row">
                       <div className="control-row-info">
                         <h4>Mode Two-Stage (Anti-Tiang)</h4>
-                        <p>Deteksi orang dulu (ROI) baru deteksi rokok agar tiang tidak salah deteksi</p>
+                        <p>Deteksi orang dulu (ROI) baru deteksi rokok agar objek latar diabaikan</p>
                       </div>
                       <label className="switch">
                         <input
@@ -726,7 +933,7 @@ export default function App() {
                     <div className="control-row">
                       <div className="control-row-info">
                         <h4>Tampilkan Kotak Orang</h4>
-                        <p>Kotak Hijau (AMAN), Kuning (VERIFIKASI), & Merah (MEROKOK)</p>
+                        <p>Kotak Hijau (AMAN), Kuning (VERIFIKASI), &amp; Merah (MEROKOK)</p>
                       </div>
                       <label className="switch">
                         <input
@@ -802,7 +1009,7 @@ export default function App() {
                         className="range-input"
                       />
                       <div style={{ fontSize: '0.72rem', color: '#476658', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>Status Verifikasi Saat Ini:</span>
+                        <span>Status Verifikasi Tertinggi:</span>
                         <strong>{status.consecutive_hits} / {minConsecutiveFrames} Frame ({verifyPct}%)</strong>
                       </div>
                       <div style={{ width: '100%', height: '6px', background: '#e2eee8', borderRadius: '99px', overflow: 'hidden' }}>
@@ -824,7 +1031,7 @@ export default function App() {
                   <div className="card-header">
                     <div>
                       <div className="card-title">Snapshot Pelanggaran Terkonfirmasi</div>
-                      <div className="card-subtitle">Hanya disimpan jika rokok konsisten &ge; {minConsecutiveFrames} frame</div>
+                      <div className="card-subtitle">Otomatis dari CCTV A &amp; CCTV B (&ge; {minConsecutiveFrames} frame)</div>
                     </div>
                     <button
                       className="btn"
@@ -853,7 +1060,7 @@ export default function App() {
                             className="incident-thumb"
                           />
                           <div className="incident-meta">
-                            <h5>{item.cigarette_count} Rokok Terkonfirmasi</h5>
+                            <h5>{item.camera_name?.split(' - ')[0] || 'CCTV'} • {item.cigarette_count} Rokok</h5>
                             <p>{item.timestamp} • Frame #{item.frame_number}</p>
                           </div>
                           <span className="conf-tag">
@@ -871,28 +1078,42 @@ export default function App() {
           {/* TAB 2: INCIDENT LOG GALLERY */}
           {activeTab === 'incidents' && (
             <section className="card">
-              <div className="card-header">
+              <div className="card-header" style={{ flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <div className="card-title">Galeri Bukti Pelanggaran Kawasan Tanpa Rokok</div>
                   <div className="card-subtitle">
-                    Hanya menangkap snapshot setelah terdeteksi konsisten minimal {minConsecutiveFrames} frame berturut-turut (bebas false positive 1-frame)
+                    Rekaman bukti otomatis dari CCTV A (Indoor) &amp; CCTV B (Selasar/Parkiran) setelah lolos verifikasi {minConsecutiveFrames} frame
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button className="btn btn-danger-outline" onClick={handleClearIncidents}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  {[
+                    { key: 'all', label: 'Semua Kamera' },
+                    { key: 'cctv_a', label: 'CCTV A' },
+                    { key: 'cctv_b', label: 'CCTV B' },
+                  ].map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      className={`btn btn-compact ${incidentFilter === f.key ? 'btn-primary' : ''}`}
+                      onClick={() => setIncidentFilter(f.key)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                  <button className="btn btn-danger-outline btn-compact" onClick={handleClearIncidents}>
                     <IconTrash />
                     <span>Bersihkan Riwayat</span>
                   </button>
                 </div>
               </div>
 
-              {incidents.length === 0 ? (
+              {filteredIncidents.length === 0 ? (
                 <div style={{ padding: '48px', textAlign: 'center', color: '#759485' }}>
-                  Belum ada data pelanggaran terkonfirmasi. Buka tab Live Monitoring untuk memantau secara otomatis.
+                  Belum ada data pelanggaran terkonfirmasi untuk filter ini. Buka tab Live Monitoring untuk memantau secara otomatis.
                 </div>
               ) : (
                 <div className="gallery-grid">
-                  {incidents.map((item) => (
+                  {filteredIncidents.map((item) => (
                     <div
                       key={item.id}
                       className="gallery-card"
@@ -946,7 +1167,7 @@ export default function App() {
                 </div>
                 <div className="kpi-card">
                   <div>
-                    <div className="kpi-label">Precision & Recall (Val)</div>
+                    <div className="kpi-label">Precision &amp; Recall (Val)</div>
                     <div className="kpi-value">{metrics?.val_precision ?? 93.8}% / {metrics?.val_recall ?? 89.3}%</div>
                     <div className="kpi-sub">mAP@50-95: {metrics?.val_map50_95 ?? 72.1}%</div>
                   </div>
@@ -1005,9 +1226,9 @@ export default function App() {
               <div className="card">
                 <div className="card-header">
                   <div>
-                    <div className="card-title">Arsitektur Two-Stage Detection + Temporal Filter untuk Kamera CCTV</div>
+                    <div className="card-title">Arsitektur Two-Stage Detection + Temporal Filter untuk Multi-CCTV</div>
                     <div className="card-subtitle">
-                      Solusi mengatasi perbedaan jarak kamera (Domain Shift) & False Positive 1-Frame
+                      Solusi mengatasi perbedaan jarak kamera indoor/outdoor &amp; False Positive 1-Frame
                     </div>
                   </div>
                 </div>
@@ -1016,21 +1237,21 @@ export default function App() {
                     <span className="step-num">TAHAP 1 • PERSON ROI</span>
                     <h4>Deteksi Orang (YOLOv8n COCO)</h4>
                     <p>
-                      Mendeteksi koordinat setiap orang di dalam ruangan terlebih dahulu. Objek statis di luar tubuh manusia (seperti tiang kayu coklat, jendela, lemari) otomatis diabaikan.
+                      Mendeteksi koordinat setiap orang di CCTV A (Indoor) maupun CCTV B (Outdoor) terlebih dahulu sehingga objek statis latar otomatis diabaikan.
                     </p>
                   </div>
                   <div className="pipeline-step">
                     <span className="step-num">TAHAP 2 • HD CROPPING</span>
-                    <h4>Crop Area Tubuh Atas & Tangan</h4>
+                    <h4>Crop Area Tubuh Atas &amp; Tangan</h4>
                     <p>
-                      Memotong area kepala hingga tangan tiap orang pada resolusi asli (1280×720) lalu di-upscale ke 640×640 agar batang rokok kecil terlihat besar dan jelas oleh model.
+                      Memotong area kepala hingga tangan tiap orang pada resolusi asli lalu di-upscale ke 640×640 agar batang rokok kecil terlihat jelas oleh model.
                     </p>
                   </div>
                   <div className="pipeline-step">
                     <span className="step-num">TAHAP 3 • TEMPORAL FILTER</span>
                     <h4>Verifikasi Frame Berturut-turut</h4>
                     <p>
-                      Deteksi sesaat (1–3 frame karena gangguan visual) hanya berstatus Verifikasi dan tidak masuk ke Snapshot. Snapshot hanya diambil jika rokok konsisten &ge; {minConsecutiveFrames} frame.
+                      Setiap kanal kamera memverifikasi ketahanan deteksi secara independen. Snapshot hanya direkam jika rokok konsisten &ge; {minConsecutiveFrames} frame.
                     </p>
                   </div>
                 </div>
@@ -1050,7 +1271,7 @@ export default function App() {
                   Detail Bukti Pelanggaran — {selectedIncident.camera_name}
                 </div>
                 <div className="card-subtitle">
-                  Waktu: {selectedIncident.timestamp} • Frame #{selectedIncident.frame_number} • Mode: {selectedIncident.detection_mode}
+                  Lokasi: {selectedIncident.location} • Waktu: {selectedIncident.timestamp} • Frame #{selectedIncident.frame_number}
                 </div>
               </div>
               <button className="btn" onClick={() => setSelectedIncident(null)}>
